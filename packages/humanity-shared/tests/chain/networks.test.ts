@@ -132,7 +132,7 @@ describe("resolveNetwork", () => {
     expect(previewnet.peopleChain.wsUrl).toBe("wss://previewnet.substrate.dev/people");
     expect(previewnet.peopleChain.genesisHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(previewnet.peopleChain.genesisHash).toBe(
-      "0x55e3e689ecfa9d2fffcf7d309b8011956671493982230bfd0420c683542249e9",
+      "0x732abb4e3052154ebd9201a375b0aacf2d1fe7015700235c0a8b30d44b401c19",
     );
   });
 
@@ -147,7 +147,7 @@ describe("resolveNetwork", () => {
     });
     expect(previewnet.assetHub).toEqual({
       wsUrl: "wss://previewnet.substrate.dev/asset-hub",
-      genesisHash: "0xbac97e23fc8f4bccae72a98f8aeb2bcab20bf755862304e4b46ad6473456e896",
+      genesisHash: "0xf7d88e2e343e911c9a5c1a7e6ed53d06ef4cd73276fc3afff87062a1f6f90514",
     });
   });
 });
