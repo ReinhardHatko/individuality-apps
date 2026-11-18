@@ -31,6 +31,15 @@ on:
   push:
     branches: [main]
     paths-ignore:
+      # The Jollity lab: tests and their tooling, never shipped
+      - "apps/jollity-app/lab/**"
+      - "apps/jollity-app/e2e/**"
+      - "apps/jollity-app/tests/lab/**"
+      - "apps/jollity-app/scripts/lab/**"
+      - "apps/jollity-app/lab.opening.config.ts"
+      - "apps/jollity-app/tsconfig.lab.json"
+      - "apps/jollity-app/docs/lab*.md"
+      - ".github/workflows/jollity-lab.yml"
       - "apps/humanity-app/**"
       - "apps/humanity-worker/**"
       - "packages/humanity-shared/**"
@@ -40,6 +49,15 @@ on:
     # label makes the deploy job's `if` false and it shows skipped.
     types: [opened, synchronize, reopened, labeled]
     paths-ignore:
+      # The Jollity lab: tests and their tooling, never shipped
+      - "apps/jollity-app/lab/**"
+      - "apps/jollity-app/e2e/**"
+      - "apps/jollity-app/tests/lab/**"
+      - "apps/jollity-app/scripts/lab/**"
+      - "apps/jollity-app/lab.opening.config.ts"
+      - "apps/jollity-app/tsconfig.lab.json"
+      - "apps/jollity-app/docs/lab*.md"
+      - ".github/workflows/jollity-lab.yml"
       - "apps/humanity-app/**"
       - "apps/humanity-worker/**"
       - "packages/humanity-shared/**"
