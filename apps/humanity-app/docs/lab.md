@@ -35,12 +35,12 @@ its dry runs execute no live assertions.
 
 The app owns `lab/opening`, `e2e/humanity-opening*.feature`, the lab wrapper and
 `tests/lab`. Nothing imports another checkout. The root npm lock owns the exact
-product-lab 0.3.1 dependency. The scoped WASM host override to 0.27.0 permits one
+product-lab 0.4.0 dependency. The scoped WASM host override to 0.27.0 permits one
 truapi 0.27.0; the existing sdk-host 0.31.0 override remains. Host provisioning
 and source launch use the same attested official CLI binary, 0.31.0 since the
 A3 username fix (trinity-user-agents#1974); the npm truapi packages stay 0.27.0. The host
 lock's `localNetwork` capability was probed with loopback genesis RPCs; each
-real launch verifies the complete fork routing again (product-lab 0.3.1 gives a 0.30.0 or later host the copy through `--stack`). No installed package is
+real launch verifies the complete fork routing again (product-lab 0.4.0 gives a 0.30.0 or later host the copy through `--stack`). No installed package is
 patched. Origin and adaptations are in `../lab/opening/IMPORTED.json`.
 
 The app uses its ordinary dev server and host bridge. The adapter runs the

@@ -12,4 +12,4 @@ Dependents are `.github/workflows/humanity-lab.yml`, the local wrappers and `tes
 See the root `lab/cross-app/README.md` for commands, the measured/unmeasured timing boundary, cache cleanup and C6's
 schedule switch. Scripts write evidence locally; the workflow's token-scoped comment job handles its comment.
 
-Cross-app build, run and report scripts now live at root `lab/cross-app/scripts/`. The opening, flow and scenario wrappers stay here and import shared helpers from root `lab/shared/`. All wrappers require the single root product-lab 0.3.1 pin and the scoped `@parity/truapi-host` 0.27.0 override; the CLI host each lab runs comes from its `host.lock.json`.
+Cross-app build, run and report scripts now live at root `lab/cross-app/scripts/`. The opening, flow and scenario wrappers stay here and import shared helpers from root `lab/shared/`. All wrappers require the single root product-lab 0.4.0 pin and the scoped `@parity/truapi-host` 0.27.0 override; the CLI host each lab runs comes from its `host.lock.json`.
