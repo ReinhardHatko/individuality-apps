@@ -13,6 +13,9 @@ name: Deploy
 #                      deploy-paseo label.
 #   workflow_dispatch  the same as push main
 #
+# The humanity job publishes Humanity under the names that
+# scripts/ci/humanity-legs.mjs picks, signed with HUMANITY_DOTNS_MNEMONIC.
+#
 # The paseo staging name is built as <DOTNS_DOMAIN>.paseo, because release.yml
 # promotes its CIDs onto that name and the product name is compiled into the
 # bytes: a bundle built for the staging name would derive the wrong product
@@ -30,19 +33,11 @@ run-name: Deploy ${{ github.event_name == 'pull_request' && format('PR {0}', git
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "apps/humanity-app/**"
-      - "apps/humanity-worker/**"
-      - "packages/humanity-shared/**"
   pull_request:
     branches: [main]
     # `labeled`, so deploy-preview and deploy-paseo deploy at once. Any other
     # label makes the deploy job's `if` false and it shows skipped.
     types: [opened, synchronize, reopened, labeled]
-    paths-ignore:
-      - "apps/humanity-app/**"
-      - "apps/humanity-worker/**"
-      - "packages/humanity-shared/**"
   workflow_dispatch:
     inputs:
       network:
@@ -475,6 +470,116 @@ jobs:
             echo ""
             echo "Open \`${DOMAIN}\` in the Polkadot app. The gateway link is for a browser."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  humanity-sources:
+    name: Humanity sources
+    runs-on: ubuntu-latest
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pick the Humanity names to publish
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          NETWORK: ${{ inputs.network }}
+          TARGET: ${{ inputs.target }}
+          PR: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          BEFORE: ${{ github.event.before }}
+          REF: ${{ github.ref }}
+        run: |
+          set -o pipefail
+          node scripts/ci/humanity-legs.mjs | tee -a "$GITHUB_OUTPUT"
+
+  humanity:
+    # release.yml finds the staged commit by this name.
+    name: Humanity ${{ matrix.domain }}
+    needs: humanity-sources
+    if: needs.humanity-sources.outputs.legs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ matrix.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.humanity-sources.outputs.legs) }}
+    env:
+      DOTNS_LABEL: ${{ matrix.label }}
+      BULLETIN_DEPLOY_VERSION: ${{ vars.HUMANITY_BULLETIN_DEPLOY_VERSION || '0.25.0' }}
+      VITE_DEBUG_PANEL: "true"
+      VITE_LOG_LEVEL: debug
+    steps:
+      - name: Require the HUMANITY_DOTNS_MNEMONIC secret
+        env:
+          DOTNS_MNEMONIC: ${{ secrets.HUMANITY_DOTNS_MNEMONIC }}
+        run: |
+          if [ -z "$DOTNS_MNEMONIC" ]; then
+            echo "::error title=HUMANITY_DOTNS_MNEMONIC secret missing::Add the HUMANITY_DOTNS_MNEMONIC repo secret, the seed of the account that owns the peopl names."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          check-latest: true
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A dependency published minutes before the install can 404 until the
+      # registry has it everywhere.
+      - name: Install bulletin-deploy
+        run: |
+          for attempt in 1 2 3; do
+            npm install -g "bulletin-deploy@${BULLETIN_DEPLOY_VERSION}" && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 60
+          done
+          bulletin-deploy --version
+
+      - name: Build the app and the worker
+        run: npm run humanity:setup -- --env "$MATRIX_ENV" --product-label peopl --build-only
+        env:
+          MATRIX_ENV: ${{ matrix.env }}
+          DOTNS_MNEMONIC: ${{ secrets.HUMANITY_DOTNS_MNEMONIC }}
+          VITE_GAME_STORAGE_LABEL: ${{ matrix.sandbox-suffix && format('{0}{1}', secrets.DOTNS_DOMAIN, matrix.sandbox-suffix) || '' }}
+          VITE_SENTRY_DSN: ${{ vars.HUMANITY_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ matrix.sentry && secrets.HUMANITY_SENTRY_AUTH_TOKEN || '' }}
+          SENTRY_ORG: ${{ matrix.sentry && vars.HUMANITY_SENTRY_ORG || '' }}
+          SENTRY_PROJECT: ${{ matrix.sentry && vars.HUMANITY_SENTRY_PROJECT || '' }}
+          SENTRY_CLI_NO_TELEMETRY: "1"
+
+      - name: Publish to Bulletin and DotNS
+        id: deploy
+        run: |
+          for attempt in 1 2 3; do
+            timeout 20m npm run humanity:setup -- --env "$MATRIX_ENV" --product-label peopl --skip-build && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 30
+          done
+        env:
+          MATRIX_ENV: ${{ matrix.env }}
+          DOTNS_MNEMONIC: ${{ secrets.HUMANITY_DOTNS_MNEMONIC }}
+          NODE_OPTIONS: "--max-old-space-size=8192"
+
+      - name: Comment on the PR
+        if: matrix.comment
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: humanity-preview-${{ matrix.env }}
+          message: |
+            **Preview: `${{ steps.deploy.outputs.domain }}`** (app + worker) · [logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            ${{ steps.deploy.outputs.url }}
+
+            Open `${{ steps.deploy.outputs.domain }}` in a host that boots product workers (Polkadot Desktop on the matching network) to try the worker.
 
   comment:
     name: Comment

@@ -297,8 +297,9 @@ describe("deploy.yml wiring", () => {
     expect(doc.on.pull_request.types).toEqual(["opened", "synchronize", "reopened", "labeled"])
   })
   it("has no job in front of the deploy", () => {
-    expect(Object.keys(doc.jobs).sort()).toEqual(["comment", "deploy"])
+    expect(Object.keys(doc.jobs).sort()).toEqual(["comment", "deploy", "humanity", "humanity-sources"])
     expect(deploy.needs).toBeUndefined()
+    expect(doc.jobs.humanity.needs).toBe("humanity-sources")
     expect(wf).not.toContain("needs.plan")
   })
   it("the comment job renders through deploy-comment.mjs and knows its legs from planLegs", () => {
