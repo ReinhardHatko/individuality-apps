@@ -386,12 +386,12 @@ jobs:
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      - name: Require the HUMANITY_DOTNS_MNEMONIC secret
+      - name: Require the DOTNS_MNEMONIC secret for Humanity
         env:
-          MNEMONIC: ${{ secrets.HUMANITY_DOTNS_MNEMONIC }}
+          MNEMONIC: ${{ secrets.DOTNS_MNEMONIC }}
         run: |
           if [ -z "$MNEMONIC" ]; then
-            echo "::error title=HUMANITY_DOTNS_MNEMONIC secret missing::Add the secret for the account that owns peopl.paseo and peoplnext.paseo."
+            echo "::error title=DOTNS_MNEMONIC secret missing::Add the DOTNS_MNEMONIC repo secret, the seed of the account that owns peopl.paseo and peoplnext.paseo."
             exit 1
           fi
           WORDS=$(printf '%s' "$MNEMONIC" | tr -d '\r' | wc -w | tr -d ' ')
@@ -481,7 +481,7 @@ jobs:
 
       - name: Point peopl.paseo at the staged records
         env:
-          DEPLOY_MNEMONIC: ${{ secrets.HUMANITY_DOTNS_MNEMONIC }}
+          DEPLOY_MNEMONIC: ${{ secrets.DOTNS_MNEMONIC }}
           APP_CID: ${{ steps.read.outputs.app }}
           WORKER_CID: ${{ steps.read.outputs.worker }}
         run: |

@@ -14,7 +14,7 @@ name: Deploy
 #   workflow_dispatch  the same as push main
 #
 # The humanity job publishes Humanity under the names that
-# scripts/ci/humanity-legs.mjs picks, signed with HUMANITY_DOTNS_MNEMONIC.
+# scripts/ci/humanity-legs.mjs picks, signed with DOTNS_MNEMONIC like Jollity.
 #
 # The paseo staging name is built as <DOTNS_DOMAIN>.paseo, because release.yml
 # promotes its CIDs onto that name and the product name is compiled into the
@@ -513,12 +513,12 @@ jobs:
       VITE_DEBUG_PANEL: "true"
       VITE_LOG_LEVEL: debug
     steps:
-      - name: Require the HUMANITY_DOTNS_MNEMONIC secret
+      - name: Require the DOTNS_MNEMONIC secret for Humanity
         env:
-          DOTNS_MNEMONIC: ${{ secrets.HUMANITY_DOTNS_MNEMONIC }}
+          DOTNS_MNEMONIC: ${{ secrets.DOTNS_MNEMONIC }}
         run: |
           if [ -z "$DOTNS_MNEMONIC" ]; then
-            echo "::error title=HUMANITY_DOTNS_MNEMONIC secret missing::Add the HUMANITY_DOTNS_MNEMONIC repo secret, the seed of the account that owns the peopl names."
+            echo "::error title=DOTNS_MNEMONIC secret missing::Add the DOTNS_MNEMONIC repo secret, the seed of the account that owns the peopl names."
             exit 1
           fi
 
@@ -548,7 +548,7 @@ jobs:
         run: npm run humanity:setup -- --env "$MATRIX_ENV" --product-label peopl --build-only
         env:
           MATRIX_ENV: ${{ matrix.env }}
-          DOTNS_MNEMONIC: ${{ secrets.HUMANITY_DOTNS_MNEMONIC }}
+          DOTNS_MNEMONIC: ${{ secrets.DOTNS_MNEMONIC }}
           VITE_GAME_STORAGE_LABEL: ${{ matrix.sandbox-suffix && format('{0}{1}', secrets.DOTNS_DOMAIN, matrix.sandbox-suffix) || '' }}
           VITE_SENTRY_DSN: ${{ vars.HUMANITY_SENTRY_DSN }}
           SENTRY_AUTH_TOKEN: ${{ matrix.sentry && secrets.HUMANITY_SENTRY_AUTH_TOKEN || '' }}
@@ -566,7 +566,7 @@ jobs:
           done
         env:
           MATRIX_ENV: ${{ matrix.env }}
-          DOTNS_MNEMONIC: ${{ secrets.HUMANITY_DOTNS_MNEMONIC }}
+          DOTNS_MNEMONIC: ${{ secrets.DOTNS_MNEMONIC }}
           NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Comment on the PR
