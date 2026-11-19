@@ -173,12 +173,13 @@ jobs:
           free -m
           cat /sys/fs/cgroup/memory.events || true
       - name: Install demo tools when absent
+        timeout-minutes: 5
         if: always()
         continue-on-error: true
         run: |
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             sudo apt-get update
-            sudo apt-get install -y ffmpeg
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
           fi
       - name: Cut the opening demo
         id: demo
