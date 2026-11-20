@@ -28,7 +28,7 @@ import { getWsProvider } from "polkadot-api/ws"
 import type { App } from "@parity/product-sdk"
 import type { ProductAccount } from "@parity/product-sdk-host"
 import { linkName, type NameLinkResult, type NameLinkTrigger } from "@individuality/name-link"
-import { localNetwork, network, productAccount, signupAccountIndex } from "@jollity/protocol"
+import { chainGenesis, localNetwork, network, productAccount, signupAccountIndex } from "@jollity/protocol"
 import { devLog } from "../debug/log-store"
 import { assetHubClient, peopleChainClient } from "../engine"
 import { knownDisplayName } from "../host/identity"
@@ -57,10 +57,42 @@ async function signWithRoot(username: string, message: Uint8Array) {
     network().dotnsTLD === "paseo"
       ? (await import("@parity/product-sdk-descriptors/paseo-individuality")).paseo_individuality
       : (await import("@parity/product-sdk-descriptors/previewnet-individuality")).previewnet_individuality
-  const local = localNetwork()
-  const peopleChain = local ? { ...base, genesis: local.genesis.people } : base
+  const genesis = await peopleGenesis()
+  const peopleChain = genesis ? { ...base, genesis } : base
   const signed = await (await app).wallet.signMessageWithDotNsIdentity({ peopleChain, username, message })
   return { root: fromHex(signed.accountId), signature: signed.signature }
+}
+
+/** as long as the engine waits for the host to name its chains (lib/engine.ts) */
+const DISCOVERY_TIMEOUT_MS = 5_000
+
+/**
+ * The People chain's genesis to sign on: the local network's, else the one
+ * the host names, else Jollity's own table's (`chainGenesis`). Those are the
+ * sources the engine's host client takes its chain from, in its order
+ * (lib/engine.ts), so the root signs on the chain Jollity reads through the
+ * host. Never the SDK descriptor's own while one of those is known: a network
+ * that restarts from genesis (previewnet) keeps its old genesis in the
+ * descriptor until the SDK's next release, and a host refuses a chain it does
+ * not serve ("Chain 0x… is not supported by the current host"), so the root
+ * never signs. The table carries no previewnet genesis, so there a host that
+ * answers no discovery still gets the descriptor's, as the engine gets none.
+ */
+async function peopleGenesis(): Promise<`0x${string}` | undefined> {
+  const local = localNetwork()
+  if (local) return local.genesis.people
+  const sdk = await import("@parity/product-sdk-host")
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const discovery = await Promise.race([
+    sdk.getHostChainInfo(["People"]).catch((error: unknown) => {
+      note("the host's chain discovery failed", { detail: String(error) }, "warn")
+      return undefined
+    }),
+    new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), DISCOVERY_TIMEOUT_MS)
+    }),
+  ]).finally(() => clearTimeout(timer))
+  return discovery?.chains?.People ?? chainGenesis("people")
 }
 
 /**
