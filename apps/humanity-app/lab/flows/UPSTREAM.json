@@ -84,8 +84,8 @@
       "source": "suites/humanity/lab/steps/games/attendance/game.repository.ts",
       "destination": "lab/shared/upstream/lab/steps/games/attendance/game.repository.ts",
       "sourceSha256": "6bc5c82725bc6058021f3220132d446b3f6df5b6466976a767fd0edaeca860ff",
-      "sha256": "fd2ebe9bfc6b6f3d999a7e58ec31f645bb0ba0384729e78af8eab2c1ef409571",
-      "adaptation": "Forward the atomic setup failure attachment callback before private run cleanup; preserve the existing successful setup record"
+      "sha256": "c7cdcdae6258cc8e972f4b18ca015ab0975c52287a4e3343d18aed715b18e1d4",
+      "adaptation": "Forward the atomic setup failure attachment callback before private run cleanup; preserve the existing successful setup record; schedule with an empty tenure_claim_window, as runtime 3_005_000 requires"
     },
     {
       "source": "suites/humanity/lab/steps/games/chain.ts",

@@ -202,6 +202,8 @@ export class GameRepository implements GameOperations {
               rounds: 1,
               max_group_size: 4,
               airdrops: options.withPrize ? [demoPrize] : [],
+              // Runtime 3_005_000: the lab claims no tenure credits, so the window is empty.
+              tenure_claim_window: 0,
             },
           ],
         }),
