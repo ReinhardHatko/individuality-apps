@@ -5,8 +5,8 @@
     "people": {
       "wsUrl": "wss://previewnet.substrate.dev/people",
       "metadata": ".papi/metadata/people.scale",
-      "genesis": "0x55e3e689ecfa9d2fffcf7d309b8011956671493982230bfd0420c683542249e9",
-      "codeHash": "0x69e7126f098bdf708302e52b892fd76c5d2477627bce47cbfcee7fcd5db17871"
+      "genesis": "0x732abb4e3052154ebd9201a375b0aacf2d1fe7015700235c0a8b30d44b401c19",
+      "codeHash": "0x4cb6604dc0588cc27df3fc7f274b00cd26fd7211d51bad29e9954984a4074f07"
     }
   }
 }

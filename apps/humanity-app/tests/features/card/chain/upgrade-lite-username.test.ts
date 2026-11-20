@@ -123,10 +123,17 @@ const legacyPublicKey = getPublicKey(testSecret);
 const productPublicKey = new Uint8Array(32).fill(0x22);
 const expectedLiteAddress = ss58Encode(legacyPublicKey, 42);
 const productAddress = ss58Encode(productPublicKey, 42);
-const signatureBytes = sign(testSecret, Binary.fromHex(ALIAS_HEX));
+/** `Resources.SigningContext` as previewnet's 3_005_000 runtime publishes it. */
+const RESOURCES_SIGNING_CONTEXT_HEX =
+  "0x65b1d8b42ca7c4e0f52317167611fcf167fb682fb226d02180f9a591ed1a067d";
+/** What `register_person` verifies: context ‖ "pop:resources:register_person" ‖ alias. */
+const PROOF_MESSAGE_HEX = `${RESOURCES_SIGNING_CONTEXT_HEX}${Binary.toHex(
+  Binary.fromText("pop:resources:register_person"),
+).slice(2)}${ALIAS_HEX.slice(2)}`;
+const signatureBytes = sign(testSecret, Binary.fromHex(PROOF_MESSAGE_HEX));
 /**
  * The wire shape the unwatermarked proof call must take: the lite username
- * owner as product account `peopl.<tld>`/0 (RFC-0028), and the raw alias bytes as the payload — no `<Bytes>`
+ * owner as product account `peopl.<tld>`/0 (RFC-0028), and the raw proof message as the payload — no `<Bytes>`
  * envelope for the host to strip or add.
  */
 const PROOF_REQUEST = {
@@ -134,7 +141,7 @@ const PROOF_REQUEST = {
     dotNsIdentifier: LITE_IDENTITY_DOMAIN,
     derivationIndex: { tag: "Index", value: 0 },
   },
-  payload: { tag: "Bytes", value: { bytes: ALIAS_HEX } },
+  payload: { tag: "Bytes", value: { bytes: PROOF_MESSAGE_HEX } },
 };
 
 interface FakeChainApi {
@@ -149,6 +156,7 @@ interface FakeChainApi {
   };
   constants: {
     PeopleAirdrops: { people_airdrops_context: Mock };
+    Resources: { SigningContext: Mock };
   };
   tx: { Resources: { register_person: Mock } };
 }
@@ -203,7 +211,7 @@ interface FakeTruApi {
 
 /**
  * The host's unwatermarked signing calls (host-rust-core#731), reached on the
- * truAPI client directly: the signature is over the raw alias, with no
+ * truAPI client directly: the signature is over the raw proof message, with no
  * `<Bytes>` envelope, which is what `Resources.register_person` verifies. The
  * legacy-account variant is only the fallback for a `dev.peopl.*` subname or
  * preview, where the product's own `/0` is not the owner; see `sign-lite-identity-proof.test.ts`.
@@ -261,6 +269,9 @@ function makeApi(): FakeChainApi {
     constants: {
       PeopleAirdrops: {
         people_airdrops_context: vi.fn(async () => AIRDROPS_CONTEXT_HEX),
+      },
+      Resources: {
+        SigningContext: vi.fn(async () => RESOURCES_SIGNING_CONTEXT_HEX),
       },
     },
     tx: {

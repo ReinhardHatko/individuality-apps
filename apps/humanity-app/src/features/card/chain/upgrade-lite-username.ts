@@ -35,6 +35,7 @@ import {
 } from "./username-upgrade-preflight.ts";
 import { UsernameUpgradeError } from "./username-upgrade-errors.ts";
 import { verifyLiteIdentityProof } from "./verify-lite-identity-proof.ts";
+import { registerPersonProofMessage } from "./register-person-proof.ts";
 export { UsernameUpgradeError } from "./username-upgrade-errors.ts";
 
 /**
@@ -247,10 +248,14 @@ async function runUpgrade(
 
     flow.stage("sign");
     flow.set({ "username.choice": usernameChoice });
+    const proofMessage = registerPersonProofMessage(
+      Binary.fromHex(await api.constants.Resources.SigningContext()),
+      aliasBytes,
+    );
     let signature: Uint8Array;
     try {
       signature = await withTimeout(
-        accounts.signLiteIdentityProof(aliasBytes),
+        accounts.signLiteIdentityProof(proofMessage),
         SIGNING_TIMEOUT_MS,
         SIGNING_TIMEOUT_MESSAGE,
       );
@@ -261,7 +266,7 @@ async function runUpgrade(
     }
     flow.stage("verify");
     await verifyLiteIdentityProof(
-      aliasBytes,
+      proofMessage,
       signature,
       accounts.litePublicKey,
     );
