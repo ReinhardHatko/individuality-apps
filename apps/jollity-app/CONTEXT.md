@@ -522,10 +522,12 @@ around and where.
   `@parity/truapi` in package-lock.json, and `npm run dev:host` warns on a
   skew: app, CLI and phone move together. truapi-host 0.23.0 and later build
   the stock signer's transaction completely, which the app relies on.
-- **Detection.** The host has no chain discovery; `lib/engine.ts` falls back
-  to a genesis keyed by the product TLD. Both host paths on iOS set the
-  bridge marks synchronously at document start, so detection itself is not
-  racy.
+- **Detection.** A host that answers chain discovery names its chains:
+  `lib/engine.ts` takes the People genesis from it, and so does the name
+  link's root signature (`lib/draw/name-link.ts`). A host that answers none
+  gets a genesis keyed by the product TLD, which previewnet does not have.
+  Both host paths on iOS set the bridge marks synchronously at document
+  start, so detection itself is not racy.
 - **Index 1.** The player is the product account at derivation index 1. The
   native game that claimed index 0 is gone, but every lite person on the
   current networks is pinned to their index-1 account (`Game.LiteInvites`)
