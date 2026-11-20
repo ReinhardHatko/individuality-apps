@@ -71,11 +71,28 @@ describe("seat name root signature", () => {
   it.each([
     ["paseo-next-v2", paseo_individuality],
     ["previewnet", previewnet_individuality],
-  ] as const)("keeps the hosted %s descriptor unchanged", async (key, descriptor) => {
+  ] as const)("signs on the genesis the build overrides %s with, not the descriptor's", async (key, descriptor) => {
+    const relaunched = `0x${"ab".repeat(32)}` as const;
+    state.network = resolveNetwork(key, undefined, { people: relaunched, assetHub: null });
+    expect(await linkSeatName("register")).toBe("linked");
+    expect(state.sign).toHaveBeenCalledWith({
+      peopleChain: { ...descriptor, genesis: relaunched },
+      username: "alice",
+      message: new Uint8Array([1, 2]),
+    });
+    expect(descriptor.genesis).not.toBe(relaunched);
+  });
+
+  it.each([
+    ["paseo-next-v2", paseo_individuality],
+    ["previewnet", previewnet_individuality],
+  ] as const)("signs on the %s table's People genesis, whatever the descriptor's", async (key, descriptor) => {
+    // The table is what the People client reads. Where the SDK's descriptor names another chain (previewnet after a
+    // relaunch, until the SDK follows) the table's wins; where the two agree this only pins that nothing else changed.
     state.network = NETWORKS[key];
     expect(await linkSeatName("register")).toBe("linked");
     expect(state.sign).toHaveBeenCalledWith({
-      peopleChain: descriptor,
+      peopleChain: { ...descriptor, genesis: NETWORKS[key].peopleChain.genesisHash },
       username: "alice",
       message: new Uint8Array([1, 2]),
     });

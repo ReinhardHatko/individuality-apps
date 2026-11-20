@@ -51,10 +51,10 @@ async function signWithRoot(username: string, message: Uint8Array) {
     network.key === "paseo-next-v2"
       ? (await import("@parity/product-sdk-descriptors/paseo-individuality")).paseo_individuality
       : (await import("@parity/product-sdk-descriptors/previewnet-individuality")).previewnet_individuality;
-  // The SDK selects the host chain by descriptor.genesis, not our client.
-  const peopleChain = network.key === "local"
-    ? { ...base, genesis: network.peopleChain.genesisHash }
-    : base;
+  // The SDK selects the host chain by descriptor.genesis, not our client. Sign on the chain the client reads: the
+  // descriptor's genesis is the one of the SDK's release, so on a relaunched network (whose genesis the build
+  // overrides) or a local one the host knows no such chain, and the root never signs.
+  const peopleChain = { ...base, genesis: network.peopleChain.genesisHash };
   const signed = await (await app).wallet.signMessageWithDotNsIdentity({ peopleChain, username, message });
   return { root: fromHex(signed.accountId), signature: signed.signature };
 }
