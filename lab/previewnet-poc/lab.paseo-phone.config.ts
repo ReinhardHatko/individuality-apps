@@ -32,7 +32,7 @@ export default defineLab({
   // there, and skips that on a phone that has passed the screen.
   app: { label: 'Jollity', steps: dim2, chains, account: { testId: 'home', attribute: 'data-account',
     firstRun: { on: { url: '/permissions' }, steps: [{ click: { role: 'button', name: 'Allow access' } }] } } },
-  features: ['./phone-permissions.feature', './phone-rehearsal.feature', './phone-sign-up.feature', './phone-play.feature', './phone-now.feature'],
+  features: ['./phone-permissions.feature', './phone-rehearsal.feature', './phone-sign-up.feature', './phone-play.feature', './phone-now.feature', './phone-game.feature'],
   environments: { fast: false, 'paseo-copy': false, 'previewnet-copy': false },
   hosts: { android: { product: 'dim2.paseo' } },
   defaultHost: 'android',

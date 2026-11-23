@@ -1,0 +1,132 @@
+# Copyright 2026 Parity Technologies (UK) Ltd.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Jollity phone bot (Android)
+
+# One Android bot on live Paseo Next V2: a new emulator, the Polkadot app's nightly build, a person onboarded in the
+# job, and the phone lab as her. Never a required check and never on a pull request: every run claims a username on
+# the live network, and a game run puts a bot into a game real people play.
+#
+#   rehearsal  opens Jollity, gives it its permissions and reads its page. Any time of day, about 20 minutes.
+#   game       the same, then she signs up for the game at `game_time` (UTC), plays it and her report is read from
+#              the chain. Dispatch it 45 to 60 minutes before the game (10:00, 13:00 and 16:00 UTC).
+#
+# Nothing here needs a secret: the APK is a public prerelease of paritytech/trinity-user-agents, the person is made by
+# the app through the network's identity backend, and she signs up on the free seat.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to run
+        type: choice
+        options: [rehearsal, game]
+        default: rehearsal
+      game_time:
+        description: "game mode: the game's time of day in UTC, HH:MM (10:00, 13:00 or 16:00)"
+        type: string
+        default: ""
+      apk_tag:
+        description: The android-* prerelease of trinity-user-agents to install; empty for the newest
+        type: string
+        default: ""
+  # TRIAL ONLY, to be removed before this file goes to main: workflow_dispatch needs the file on the default branch,
+  # so on a fork a push to this branch starts a run. Its mode and game time come from the head commit's message:
+  # `[game 10:00]` is a game run, anything else a rehearsal.
+  push:
+    branches: [ci/jollity-phone-bot-trial]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jollity-phone-bot-android
+  cancel-in-progress: false
+
+jobs:
+  android:
+    name: Android bot
+    runs-on: ${{ vars.JOLLITY_PHONE_RUNNER || 'ubuntu-24.04' }}
+    # A game run: up to an hour before the game, the game and its reporting (about 30 minutes), and the setup.
+    timeout-minutes: 150
+    env:
+      APK_REPO: paritytech/trinity-user-agents
+      APK_ASSET: app-gp-nightly.apk
+      HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+      INPUT_MODE: ${{ inputs.mode }}
+      INPUT_GAME_TIME: ${{ inputs.game_time }}
+      INPUT_APK_TAG: ${{ inputs.apk_tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: What this run does
+        id: plan
+        run: |
+          mode="${INPUT_MODE:-rehearsal}"; game_time="$INPUT_GAME_TIME"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [[ "$HEAD_MESSAGE" =~ \[game\ ([0-2][0-9]:[0-5][0-9])\] ]]; then
+            mode=game; game_time="${BASH_REMATCH[1]}"
+          fi
+          if [ "$mode" = game ] && ! [[ "$game_time" =~ ^[0-2][0-9]:[0-5][0-9]$ ]]; then
+            echo "::error::A game run needs game_time as HH:MM (UTC), got '$game_time'"; exit 1
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"; echo "game_time=$game_time" >> "$GITHUB_OUTPUT"
+          echo "Mode: $mode ${game_time:+(game at $game_time UTC)}; now $(date -u +%H:%M) UTC"
+      - name: Record capacity
+        run: |
+          nproc
+          free -m
+          df -h /
+          ls -l /dev/kvm || echo "no /dev/kvm"
+      - run: npm ci
+      # The lab starts its own browser with the environment, also when every person is on a phone (seen locally on
+      # 23 November 2026: without one, "The environment did not start").
+      - name: Install the lab's browser
+        run: npx playwright install --with-deps chromium
+      - name: Download the Polkadot app's nightly APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$INPUT_APK_TAG"
+          if [ -z "$tag" ]; then
+            tag=$(gh api "repos/$APK_REPO/releases?per_page=40" --jq '[.[] | select(.tag_name | startswith("android-")) | select(.draft | not)][0].tag_name')
+          fi
+          [ -n "$tag" ] && [ "$tag" != null ] || { echo "::error::No android-* release found in $APK_REPO"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/apk"
+          gh release download "$tag" --repo "$APK_REPO" --pattern "$APK_ASSET" --dir "$RUNNER_TEMP/apk"
+          echo "APK=$RUNNER_TEMP/apk/$APK_ASSET" >> "$GITHUB_ENV"
+          echo "APK: $tag, $(du -h "$RUNNER_TEMP/apk/$APK_ASSET" | cut -f1), sha256 $(sha256sum "$RUNNER_TEMP/apk/$APK_ASSET" | cut -c1-16)…"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run the bot on an emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          MODE: ${{ steps.plan.outputs.mode }}
+          GAME_TIME: ${{ steps.plan.outputs.game_time }}
+          OUT: ${{ github.workspace }}/artifacts/phone-bot
+        with:
+          # The app registers a person through the identity backend, which asks Play Integrity: a Play Store image.
+          api-level: 35
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_8
+          ram-size: 4096M
+          heap-size: 1024M
+          disk-size: 6144M
+          # Jollity keeps its door shut without a camera, and an AVD's front camera is off unless it is given one.
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-load -gpu swiftshader_indirect -dns-server 8.8.8.8,8.8.4.4 -camera-front emulated -camera-back emulated
+          emulator-boot-timeout: 1500
+          disable-animations: true
+          script: bash lab/previewnet-poc/ci/android-phone-bot.sh "$MODE" "$APK" "$GAME_TIME"
+      # Text only: the script has dropped every picture, since a game's screens show real people's faces.
+      - name: Upload the run's logs and reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jollity-phone-bot-android-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phone-bot
+          if-no-files-found: warn
+          retention-days: 14
