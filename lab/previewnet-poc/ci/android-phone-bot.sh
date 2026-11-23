@@ -89,15 +89,24 @@ fi
 
 # Text only leaves the runner: no screenshot, no video, and the reports without their pictures.
 find "$out" .product-lab lab/previewnet-poc/.product-lab -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.mp4' -o -name '*.webm' -o -name 'report.html' \) -delete 2>/dev/null || true
-for report in "$out"/report-*/cucumber.json; do
+# The report is product-lab-test.json; any JSON a report folder holds is gone through, whatever it is called.
+for report in "$out"/report-*/*.json; do
   [[ -f "$report" ]] || continue
   node -e '
-    const fs = require("node:fs"), file = process.argv[1], report = JSON.parse(fs.readFileSync(file, "utf8"));
+    const fs = require("node:fs"), file = process.argv[1];
+    let report; try { report = JSON.parse(fs.readFileSync(file, "utf8")); } catch { process.exit(0); }
     let dropped = 0;
-    for (const feature of report) for (const element of feature.elements ?? []) for (const step of element.steps ?? [])
-      if (step.embeddings) { const kept = step.embeddings.filter(one => !/^(image|video)\//.test(one.mime_type ?? "")); dropped += step.embeddings.length - kept.length; step.embeddings = kept; }
-    fs.writeFileSync(file, JSON.stringify(report));
-    console.log(`[phone-bot] ${file}: ${dropped} picture(s) dropped`);
+    const clean = (value) => {
+      if (Array.isArray(value)) {
+        for (let index = value.length - 1; index >= 0; index--) {
+          const one = value[index];
+          if (one && typeof one === "object" && /^(image|video)\//.test(String(one.mime_type ?? one.mimeType ?? one.mediaType ?? ""))) { value.splice(index, 1); dropped++; } else clean(one);
+        }
+      } else if (value && typeof value === "object") for (const inner of Object.values(value)) clean(inner);
+    };
+    clean(report);
+    if (dropped) fs.writeFileSync(file, JSON.stringify(report));
+    console.log(`[phone-bot] ${file.split("/").slice(-2).join("/")}: ${dropped} picture(s) dropped`);
   ' "$report"
 done
 mkdir -p "$out/console"; cp .product-lab/previewnet-poc/run-*/console/*.log "$out/console/" 2>/dev/null || true
