@@ -13,9 +13,13 @@
 # A game run starts its lab 25 minutes before game time: the sign-up needs ten minutes of an open registration, and
 # the play step waits at most 22 minutes for the game to begin.
 #
-# What it keeps is text only, under $OUT (default artifacts/phone-bot): the lab's screenshots show the faces of the
-# real people in her group, and a public repository's artifacts are public. The report's pictures are dropped too.
+# No picture is taken and no video recorded: a game's screen shows the faces of the real people in her group, and
+# this runs on a machine that is not ours. The lab's steps and product-lab's own recording are both told so below.
+# What it keeps is text only, under $OUT (default artifacts/phone-bot); as a second guard, any picture found at the
+# end is deleted and the reports are gone through for embedded ones.
 set -euo pipefail
+export PREVIEWNET_POC_PICTURES=off PRODUCT_LAB_RECORDINGS=off
+unset PRODUCT_LAB_RECORDINGS_VIDEO
 
 mode="${1:?rehearsal or game}"; apk="${2:?path of the APK}"; game_time="${3:-}"
 serial="${ANDROID_SERIAL:-emulator-5554}"
@@ -88,7 +92,9 @@ else
 fi
 
 # Text only leaves the runner: no screenshot, no video, and the reports without their pictures.
-find "$out" .product-lab lab/previewnet-poc/.product-lab -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.mp4' -o -name '*.webm' -o -name 'report.html' \) -delete 2>/dev/null || true
+taken=$(find "$out" .product-lab lab/previewnet-poc/.product-lab -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' \) 2>/dev/null | wc -l)
+say "pictures or videos the run wrote: $taken (expected 0)"
+find "$out" .product-lab lab/previewnet-poc/.product-lab -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' -o -name 'report.html' \) -delete 2>/dev/null || true
 # The report is product-lab-test.json; any JSON a report folder holds is gone through, whatever it is called.
 for report in "$out"/report-*/*.json; do
   [[ -f "$report" ]] || continue
@@ -110,5 +116,7 @@ for report in "$out"/report-*/*.json; do
   ' "$report"
 done
 mkdir -p "$out/console"; cp .product-lab/previewnet-poc/run-*/console/*.log "$out/console/" 2>/dev/null || true
+left=$(find "$out" .product-lab lab/previewnet-poc/.product-lab -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' \) 2>/dev/null | wc -l)
+say "pictures or videos on this runner after the run: $left"
 say "finished with status $status as $username"
 exit "$status"

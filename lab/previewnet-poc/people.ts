@@ -34,6 +34,13 @@ export interface Player {
   readonly own?: Person;
 }
 
+/**
+ * No picture of anybody's screen, when a run says so (`PREVIEWNET_POC_PICTURES=off`): a game's screen shows the faces
+ * of the real people in her group, and a run on a machine that is not ours (a CI runner) takes none at all, not even
+ * to delete it afterwards. The steps treat "no picture" as they do on a host that cannot take one.
+ */
+const noPictures = process.env.PREVIEWNET_POC_PICTURES === 'off';
+
 /** The person a step names. */
 /** The game account of each person on a default session, as her home first named it. */
 const accounts = new Map<string, string>();
@@ -44,6 +51,7 @@ export function playerOf(actor: { id: string; name: string }): Player {
       page: async () => (await own.jollity()).page,
       account: async () => own.game.address,
       async screenshot() {
+        if (noPictures) return undefined;
         const inApp = await own.jollity();
         return (inApp.session.screenshot?.() ?? (inApp.page as unknown as Picture).screenshot?.({ type: 'png', timeout: 4_000 }))?.catch(() => undefined);
       },
@@ -67,7 +75,7 @@ export function playerOf(actor: { id: string; name: string }): Player {
       return shown;
     },
     // On a phone the page is the app's webview, which cannot image itself: product-lab images the device's screen.
-    screenshot: async () => defaultSessionScreenshot(actor.id, { timeoutMs: 4_000 }).then(taken => taken.status === 'captured' ? taken.bytes : undefined, () => undefined),
+    screenshot: async () => noPictures ? undefined : defaultSessionScreenshot(actor.id, { timeoutMs: 4_000 }).then(taken => taken.status === 'captured' ? taken.bytes : undefined, () => undefined),
   };
 }
 
