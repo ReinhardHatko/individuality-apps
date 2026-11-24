@@ -34,7 +34,15 @@ const REPORT_WAIT_MS = 15 * 60_000;
 type Seat = { player: Player; name: string; id: string; page: BrowserPage; account: string };
 
 /** The game the people of this scenario played, and the block the lab started watching from. */
-let played: { index: number; gameDate: number; fromBlock: number } | undefined;
+let played: { index: number; gameDate: number; fromBlock: number; accounts: string[] } | undefined;
+/**
+ * The scan for the game's reports, shared by every person's "report is finalized": each block is read once, and a
+ * report found while looking for one person is kept for the next. A public node keeps a block's state for a few
+ * minutes only (live Previewnet, 24 November 2026: "State already discarded" for a block twenty minutes old), so the
+ * scan starts where the game began, a block that cannot be read is counted and passed over, and nobody reads a block
+ * a second time, later, when it may be gone.
+ */
+let scan: { next: number; reports: Map<string, Record<string, unknown>>; unreadable: number } | undefined;
 
 /** Where a person's Jollity stands, read from the page alone. The script closes over nothing and names no function of
  *  its own: it is sent to the page as source, where the TS runner's helpers do not exist. */
@@ -158,6 +166,8 @@ function watch(people: readonly Seat[], signal: AbortSignal, gameDate: number) {
   };
   const changed = (who: string, seen: unknown) => last.get(who) !== JSON.stringify(seen);
   const stop = new AbortController(), stopped = AbortSignal.any([signal, stop.signal]);
+  // The block the chain was at half a minute before the game: no report of this game is in an earlier one.
+  let gameBlock: number | undefined;
   // Nobody in the game four minutes after it began: it is lost, and waiting out the play loop's twelve adds nothing.
   const lost = new AbortController();
   let entered = false;
@@ -165,6 +175,7 @@ function watch(people: readonly Seat[], signal: AbortSignal, gameDate: number) {
     while (!stopped.aborted) {
       if (!entered && Date.now() / 1000 > gameDate + 240) lost.abort(Error('Nobody entered the game within four minutes of its start'));
       const best = await world().people.bestHead().catch(() => undefined);
+      if (gameBlock === undefined && best && Date.now() / 1000 >= gameDate - 30) gameBlock = best.number;
       const game = best ? await read('Game', 'Game', [], best.hash).catch(() => undefined) as Game | undefined : undefined;
       const rows = best ? await Promise.all(people.map(person => read('Game', 'Players', [{ type: 'Account', value: person.account }], best.hash).catch(() => 'unread'))) : [];
       note('chain', { game: game ? { index: game.index, state: game.state } : null, players: Object.fromEntries(people.map((person, index) => [person.name, rows[index] ?? null])) });
@@ -178,7 +189,7 @@ function watch(people: readonly Seat[], signal: AbortSignal, gameDate: number) {
       await delay(10_000, undefined, { signal: stopped }).catch(() => undefined);
     }
   })();
-  return { timeline, lost: lost.signal, async stop() { stop.abort(); await done.catch(() => undefined); } };
+  return { timeline, lost: lost.signal, gameBlock: () => gameBlock, async stop() { stop.abort(); await done.catch(() => undefined); } };
 }
 
 const playTakes = { timeoutMs: 22 * 60_000 + PLAY_ALLOWS_MS + 120_000 };
@@ -210,7 +221,8 @@ async function play(lab: StepLab, names: readonly unknown[]) {
     const row = await read('Game', 'Players', [{ type: 'Account', value: person.account }], head.hash) as { registered?: boolean } | undefined;
     if (row?.registered !== true) fail('not-on-chain', `${person.name} is not registered for game ${game.index}`);
   }
-  played = { index: game.index, gameDate: game.game_date, fromBlock: head.number };
+  played = { index: game.index, gameDate: game.game_date, fromBlock: head.number, accounts: people.map(person => person.account) };
+  scan = undefined;
   const untilPlay = game.game_date - Number(now / 1000n);
   await lab.attach(jsonEvidence({ game, at: head, secondsToGame: untilPlay, players: people.map(person => ({ name: person.name, account: person.account })) }));
   // A dev server compiles a route when it is first asked for. Jollity moves to /game a minute before play: ask now.
@@ -225,6 +237,9 @@ async function play(lab: StepLab, names: readonly unknown[]) {
     return playDim2InApp(cssOnly(page), undefined, playing, game.game_date * 1000, undefined, undefined, people.length > 1 ? together.join(person.id) : undefined);
   }));
   await watching.stop();
+  // The reports are looked for from the game on, not from the wait before it: those blocks' state may be gone by now.
+  const began = watching.gameBlock();
+  if (played && began !== undefined) played.fromBlock = Math.max(played.fromBlock, began);
   await Promise.all(people.map(person => collect(person)));
   const evidence = await Promise.all(people.map(async (person, index) => {
     const outcome = outcomes[index]!;
@@ -244,28 +259,36 @@ step("{actor}'s report of the game is finalized", async ({ lab }, name) => {
   const state = world(), who = playerOf(lab.actor(String(name))), account = await who.account(), page = await who.page(), game = played;
   if (!game) throw Error('No game was played in this scenario');
   const deadline = Date.now() + REPORT_WAIT_MS, others: unknown[] = [];
-  let next = game.fromBlock, head = await state.people.finalizedHead();
+  const reading = scan ??= { next: game.fromBlock, reports: new Map(), unreadable: 0 };
+  let head = await state.people.finalizedHead();
   for (;;) {
     state.signal.throwIfAborted();
+    const mine = reading.reports.get(account);
+    if (mine) { await lab.attach(jsonEvidence({ report: mine, finalizedHead: head, blocksNotReadable: reading.unreadable })); return; }
     head = await state.people.finalizedHead();
-    for (let number = next; number <= head.number; number++) {
-      const block = await state.people.blockAt(number); if (!block) continue;
-      const events = await state.people.historicalStorage('System', 'Events', [], block.hash) as RuntimeEvent[] | undefined;
-      const found = findEvent(events ?? [], 'Game', 'ReportSubmitted', value => eventBelongsToAccount(value, account, game.index));
-      if (found) {
-        const hashes = await state.people.extrinsicHashes(block.hash);
-        await lab.attach(jsonEvidence({ report: { game: game.index, account, block: { number, hash: block.hash }, extrinsicIndex: found.extrinsicIndex, txHash: hashes?.[found.extrinsicIndex] ?? null, event: found.value }, finalizedHead: head }));
-        return;
+    for (; reading.next <= head.number; reading.next++) {
+      const number = reading.next;
+      let block: Awaited<ReturnType<typeof state.people.blockAt>>, events: RuntimeEvent[] | undefined;
+      try {
+        block = await state.people.blockAt(number); if (!block) continue;
+        events = await state.people.historicalStorage('System', 'Events', [], block.hash) as RuntimeEvent[] | undefined;
+      } catch { reading.unreadable++; continue; }
+      // Every person of this game is looked for in the block, so that it is read once for all of them.
+      for (const player of game.accounts.includes(account) ? game.accounts : [...game.accounts, account]) {
+        const found = findEvent(events ?? [], 'Game', 'ReportSubmitted', value => eventBelongsToAccount(value, player, game.index));
+        if (!found || reading.reports.has(player)) continue;
+        const hashes = await state.people.extrinsicHashes(block.hash).catch(() => undefined);
+        reading.reports.set(player, { game: game.index, account: player, block: { number, hash: block.hash }, extrinsicIndex: found.extrinsicIndex, txHash: hashes?.[found.extrinsicIndex] ?? null, event: found.value });
       }
       // What other reports the chain took, in case this one is there in a shape the lab does not expect.
       const any = findEvent(events ?? [], 'Game', 'ReportSubmitted');
       if (any && others.length < 10) others.push({ block: number, event: any.value });
     }
-    next = head.number + 1;
+    if (reading.reports.has(account)) continue;
     if (Date.now() >= deadline) break;
     await delay(6_000, undefined, { signal: state.signal });
   }
-  await lab.attach(jsonEvidence({ noReport: { game: game.index, account, scanned: { from: game.fromBlock, to: head.number }, otherReports: others },
+  await lab.attach(jsonEvidence({ noReport: { game: game.index, account, scanned: { from: game.fromBlock, to: head.number }, blocksNotReadable: reading.unreadable, otherReports: others },
     screen: await screen(page) }));
   fail('not-on-chain', `No finalized Game.ReportSubmitted from ${who.name} for game ${game.index} within ${REPORT_WAIT_MS / 60_000} minutes`);
 }, { timeoutMs: REPORT_WAIT_MS + 120_000 });
