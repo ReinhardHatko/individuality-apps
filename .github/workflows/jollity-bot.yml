@@ -7,8 +7,10 @@ name: Jollity bot
 # so that another workflow (a nightly, a check after a deployment) calls it once per host and gets the same run.
 #
 #   host      android   the Polkadot app on an emulator, a person onboarded in the job
-#             cli       two people on the truAPI CLI host, Jollity built from this checkout
-#             ios       not built yet (web and desktop come after it)
+#             cli       people on the truAPI CLI host, Jollity built from this checkout: two on previewnet, who
+#                       play each other, and one on paseo-next-v2
+#             ios       the Polkadot app in an iOS simulator, a person onboarded in the job
+#                       (web and desktop come after it)
 #   network   paseo-next-v2 or previewnet
 #   mode      game        signs up for one game, plays it, and reads the report from the People chain
 #             rehearsal   opens Jollity, gives it its permissions and reads its page; any time of day
@@ -17,9 +19,10 @@ name: Jollity bot
 #
 #   android + paseo-next-v2   rehearsal and game. The app's nightly build is a public prerelease.
 #   cli     + previewnet      game. Nobody else plays there, so the two people play each other.
+#   cli     + paseo-next-v2   game. One person; her page's console is not uploaded (it names real players).
+#   ios     + paseo-next-v2   rehearsal and game. The app's simulator build is a public prerelease.
 #   android + previewnet      refused: the app's Previewnet build is published nowhere a job can fetch it.
-#   cli     + paseo-next-v2   refused: not built yet.
-#   ios                       refused: not built yet.
+#   ios     + previewnet      refused, for the same reason.
 #
 # One game for a whole run: a game run takes `play_time` (Unix seconds), or picks the first game far enough away
 # itself (ci/plan-game.mts). A caller with several hosts plans once and hands every call the same time, and each lab
@@ -111,10 +114,10 @@ jobs:
           [[ -z "$PRODUCT" || "$PRODUCT" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.(testnet|paseo)$ ]] || refuse "product is a published name such as dim2-pr12-sandbox00.testnet, got '$PRODUCT'."
           case "$HOST+$NETWORK" in
             android+paseo-next-v2) ;;
-            cli+previewnet) [[ "$MODE" == game ]] || refuse "The CLI leg plays a game; it has no rehearsal." ;;
+            cli+previewnet|cli+paseo-next-v2) [[ "$MODE" == game ]] || refuse "The CLI leg plays a game; it has no rehearsal." ;;
             android+previewnet) refuse "The Polkadot app's Previewnet build (Android debug) goes to Firebase App Distribution only: no job can fetch it. The nightly is Paseo Next V2's and takes no other network." ;;
-            cli+paseo-next-v2) refuse "The CLI leg on Paseo Next V2 is not built yet." ;;
-            ios+*) refuse "The iOS leg is not built yet." ;;
+            ios+paseo-next-v2) ;;
+            ios+previewnet) refuse "The Polkadot app's Previewnet simulator build is published nowhere a job can fetch it. The nightly is Paseo Next V2's." ;;
             *) refuse "Unknown host '$HOST'." ;;
           esac
           [[ -z "$PRODUCT" ]] || refuse "Opening another published name (product) is not built yet: no host has opened a pull request's preview so far."
@@ -198,6 +201,62 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: jollity-bot-android-${{ inputs.network }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phone-bot
+          if-no-files-found: warn
+          retention-days: 14
+
+  ios:
+    name: iOS bot (${{ inputs.network }}, ${{ inputs.mode }})
+    needs: plan
+    if: inputs.host == 'ios'
+    # Apple silicon: the app's simulator build is arm64 only.
+    runs-on: ${{ vars.JOLLITY_IOS_RUNNER || 'macos-15' }}
+    timeout-minutes: 150
+    env:
+      APP_REPO: paritytech/trinity-user-agents
+      APP_ASSET: polkadot-app-simulator.app.zip
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Record capacity
+        run: |
+          sysctl -n hw.ncpu hw.memsize machdep.cpu.brand_string
+          xcodebuild -version
+          xcrun simctl list runtimes
+      - run: npm ci
+      # The lab starts its own browser with the environment, also when every person is on a phone.
+      - name: Install the lab's browser
+        run: npx playwright install chromium
+      # The versions the script was written against on a Mac (24 November 2026).
+      - name: Install Appium and its XCUITest driver
+        run: |
+          npm install --global appium@4.0.0
+          appium driver install xcuitest@13.1.1
+      - name: Download the Polkadot app's simulator build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api "repos/$APP_REPO/releases?per_page=40" --jq '[.[] | select(.tag_name | startswith("simulator-")) | select(.draft | not)][0].tag_name')
+          [ -n "$tag" ] && [ "$tag" != null ] || { echo "::error::No simulator-* release found in $APP_REPO"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/app"
+          gh release download "$tag" --repo "$APP_REPO" --pattern "$APP_ASSET" --dir "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/$APP_ASSET" -d "$RUNNER_TEMP/app"
+          app=$(ls -d "$RUNNER_TEMP"/app/*.app | head -1)
+          echo "IOS_APP=$app" >> "$GITHUB_ENV"
+          echo "App: $tag, $(basename "$app"), bundle $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist"), minimum iOS $(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app/Info.plist")"
+      - name: Run the bot in a simulator
+        env:
+          MODE: ${{ inputs.mode }}
+          PLAY_TIME: ${{ needs.plan.outputs.play_time }}
+          OUT: ${{ github.workspace }}/artifacts/phone-bot
+        run: bash lab/previewnet-poc/ci/ios-phone-bot.sh "$MODE" "$IOS_APP" "$PLAY_TIME"
+      - name: Upload the run's logs and reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jollity-bot-ios-${{ inputs.network }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/phone-bot
           if-no-files-found: warn
           retention-days: 14

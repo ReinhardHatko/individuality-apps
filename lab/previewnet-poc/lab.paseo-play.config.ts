@@ -18,7 +18,7 @@ const dim2 = defineSteps({ id: 'dim2', product: { label: 'Jollity source' }, req
 export default defineLab({
   name: 'Paseo Next V2: one person joins a live game',
   app: { label: 'Jollity source', steps: dim2, chains },
-  features: ['./paseo-sign-up.feature', './paseo-play.feature', './probe.feature', './paseo-now.feature', './paseo-rehearsal.feature'],
+  features: ['./paseo-sign-up.feature', './paseo-play.feature', './probe.feature', './paseo-now.feature', './paseo-rehearsal.feature', './paseo-game.feature'],
   environments: { fast: false, 'paseo-copy': false, 'previewnet-copy': false },
   live: { 'next-v2': { people: { Ada: 'PASEO_PLAY_ADA_MNEMONIC' } } },
   advanced: { steps: ['./steps.ts', './play-steps.ts', './probe-steps.ts'], sessions: paseoPlaySessions },

@@ -28,6 +28,10 @@ unset PRODUCT_LAB_RECORDINGS_VIDEO
 mode="${1:?rehearsal or game}"; apk="${2:?path of the APK}"; play_time="${3:-}"
 serial="${ANDROID_SERIAL:-emulator-5554}"
 out="${OUT:-artifacts/phone-bot}"; mkdir -p "$out"
+# Pictures are counted from here on and deleted in $out only: on a machine that is not a throwaway runner the lab's
+# folders hold other runs' evidence, which is not this script's to remove (24 November 2026: a local trial of the iOS
+# script deleted 1343 older screenshots from a shared checkout).
+started="$out/.started"; : > "$started"
 config=lab/previewnet-poc/lab.paseo-phone.config.ts
 say() { echo "[phone-bot $(date -u +%H:%M:%S)Z] $*"; }
 
@@ -94,9 +98,9 @@ else
 fi
 
 # Text only leaves the runner: no screenshot, no video, and the reports without their pictures.
-taken=$(find "$out" .product-lab lab/previewnet-poc/.product-lab -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' \) 2>/dev/null | wc -l)
+taken=$(find "$out" .product-lab lab/previewnet-poc/.product-lab -type f -newer "$started" \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' \) 2>/dev/null | wc -l | tr -d ' ')
 say "pictures or videos the run wrote: $taken (expected 0)"
-find "$out" .product-lab lab/previewnet-poc/.product-lab -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' -o -name 'report.html' \) -delete 2>/dev/null || true
+find "$out" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' -o -name 'report.html' \) -delete 2>/dev/null || true
 # The report is product-lab-test.json; any JSON a report folder holds is gone through, whatever it is called.
 for report in "$out"/report-*/*.json; do
   [[ -f "$report" ]] || continue
@@ -118,7 +122,7 @@ for report in "$out"/report-*/*.json; do
   ' "$report"
 done
 mkdir -p "$out/console"; cp .product-lab/previewnet-poc/run-*/console/*.log "$out/console/" 2>/dev/null || true
-left=$(find "$out" .product-lab lab/previewnet-poc/.product-lab -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' \) 2>/dev/null | wc -l)
-say "pictures or videos on this runner after the run: $left"
+left=$(find "$out" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' \) 2>/dev/null | wc -l | tr -d ' ')
+say "pictures or videos in what is uploaded: $left"
 say "finished with status $status as $username"
 exit "$status"

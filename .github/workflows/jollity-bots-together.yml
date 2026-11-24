@@ -1,0 +1,101 @@
+# Copyright 2026 Parity Technologies (UK) Ltd.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Jollity bots in one game
+
+# Several hosts in one game of a live network: this workflow picks the game once and calls jollity-bot.yml for each
+# host with that game's play time, so that every bot signs up for the same game and no other. It is the shape a check
+# after a deployment has: a phone and a partner for it, in one game.
+#
+#   hosts     which bots, comma-separated: android, ios, cli (see jollity-bot.yml for what each is and where it runs)
+#   network   paseo-next-v2: dispatch it 45 to 60 minutes before a game (10:00, 13:00, 16:00 UTC)
+#             previewnet: any time; the game is the first one far enough away
+#
+# Whether the bots end up in one group is the network's to decide: Paseo Next V2 shuffles everyone who signed up.
+# Never a required check, for the reasons jollity-bot.yml gives.
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: The live network
+        type: choice
+        options: [paseo-next-v2, previewnet]
+        default: paseo-next-v2
+      hosts:
+        description: The bots, comma-separated (android, ios, cli)
+        type: string
+        default: android,cli
+      lead_seconds:
+        description: How far away the game has to be; every bot starts its lab 25 minutes before the game
+        type: string
+        default: "1800"
+  # TRIAL ONLY, to go before this file reaches main: see jollity-bot.yml. A push runs no bot.
+  push:
+    branches: [ci/jollity-phone-bot-trial]
+
+permissions:
+  contents: read
+
+jobs:
+  registered:
+    name: Registered for dispatch
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - run: echo "This push only makes the workflow known to this repository. Start the bots with a dispatch."
+
+  plan:
+    name: Pick the game (${{ inputs.network }})
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      play_time: ${{ steps.game.outputs.play_time }}
+    env:
+      NETWORK: ${{ inputs.network }}
+      HOSTS: ${{ inputs.hosts }}
+      LEAD: ${{ inputs.lead_seconds }}
+    steps:
+      - name: Check the inputs
+        run: |
+          [[ "$HOSTS" =~ ^(android|ios|cli)(,(android|ios|cli))*$ ]] || { echo "::error::hosts is a comma-separated list of android, ios and cli, got '$HOSTS'"; exit 1; }
+          [[ "$LEAD" =~ ^[0-9]{1,5}$ ]] || { echo "::error::lead_seconds is a number of seconds, got '$LEAD'"; exit 1; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - name: Pick the game
+        id: game
+        run: node --import tsx lab/previewnet-poc/ci/plan-game.mts "$NETWORK" "$LEAD"
+
+  android:
+    needs: plan
+    if: contains(format(',{0},', inputs.hosts), ',android,')
+    uses: ./.github/workflows/jollity-bot.yml
+    with:
+      host: android
+      network: ${{ inputs.network }}
+      mode: game
+      play_time: ${{ needs.plan.outputs.play_time }}
+
+  ios:
+    needs: plan
+    if: contains(format(',{0},', inputs.hosts), ',ios,')
+    uses: ./.github/workflows/jollity-bot.yml
+    with:
+      host: ios
+      network: ${{ inputs.network }}
+      mode: game
+      play_time: ${{ needs.plan.outputs.play_time }}
+
+  cli:
+    needs: plan
+    if: contains(format(',{0},', inputs.hosts), ',cli,')
+    uses: ./.github/workflows/jollity-bot.yml
+    with:
+      host: cli
+      network: ${{ inputs.network }}
+      mode: game
+      play_time: ${{ needs.plan.outputs.play_time }}
