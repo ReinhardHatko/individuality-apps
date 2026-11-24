@@ -16,6 +16,9 @@
 # artifact is text: reports, the lab's output, and each page's console.
 set -euo pipefail
 export PREVIEWNET_POC_PICTURES=off PRODUCT_LAB_RECORDINGS=off
+# A pinned game opens when the game before it is done with, which can be twenty minutes after the lab starts:
+# product-lab gives a sentence ten minutes unless told otherwise.
+export PRODUCT_LAB_STEP_TIMEOUT_MINUTES=45
 unset PRODUCT_LAB_RECORDINGS_VIDEO
 
 network="${1:?network}"; mode="${2:?mode}"; play_time="${3:-}"

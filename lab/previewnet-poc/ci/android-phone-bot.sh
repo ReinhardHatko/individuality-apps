@@ -20,6 +20,9 @@
 # end is deleted and the reports are gone through for embedded ones.
 set -euo pipefail
 export PREVIEWNET_POC_PICTURES=off PRODUCT_LAB_RECORDINGS=off
+# A pinned game opens when the game before it is done with, which can be twenty minutes after the lab starts:
+# product-lab gives a sentence ten minutes unless told otherwise.
+export PRODUCT_LAB_STEP_TIMEOUT_MINUTES=45
 unset PRODUCT_LAB_RECORDINGS_VIDEO
 
 mode="${1:?rehearsal or game}"; apk="${2:?path of the APK}"; play_time="${3:-}"
