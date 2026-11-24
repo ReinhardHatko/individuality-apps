@@ -311,6 +311,10 @@ const fedCards = (host: WorkerHost) =>
 const nextGameAt = (gamePlayTime: number) => chainRead({ running: running({ gamePlayTime }) })
 const reportingAt = (gamePlayTime: number) => running({ gamePlayTime, phase: "reporting", playEnds: gamePlayTime + 144 })
 const noGameLeft = () => chainRead({ running: null, upcoming: [] })
+const registeredAt = (gamePlayTime: number, phase: RunningGame["phase"] = "shuffle") =>
+  running({ registered: true, gamePlayTime, registrationEnds: gamePlayTime - 90, playEnds: gamePlayTime + 144, reportingEnds: gamePlayTime + 600, phase })
+const holdReminder = (host: ReturnType<typeof fakeHost>, gamePlayTime: number) =>
+  host.store.set("jollity.wg.host-reminder", { gamePlayTime, outcome: "held", startsAt: gamePlayTime * 1000 })
 const footerHost = (setRoomFooter: WorkerHost["chat"]["setRoomFooter"]) => welcomedHost({ chat: { ...fakeHost().chat, setRoomFooter } })
 
 /** A footer that answers outcome for the card of the game, or of any game when none is named, and set for the rest. */
@@ -614,6 +618,215 @@ describe("the boot sequence works", () => {
       // Then
       expect(fedCards(host)).toEqual([ahead])
       expect(footers(host)).toEqual(["Empty", docked(ahead), "Empty"])
+    })
+
+    it("empties the footer while the pill of the host counts down to the join of the docked game, and posts nothing to the feed", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      await withChain(chainRead({ running: registeredAt(soon) }), chainRead({ running: registeredAt(soon) }))
+      const host = welcomedHost()
+      holdReminder(host, soon)
+      const tick = await started(host)
+
+      // When
+      await poll(tick, host)
+
+      // Then
+      expect(footers(host)).toEqual(["Empty", docked(soon), "Empty"])
+      expect(fedCards(host)).toEqual([])
+      expect(host.store.get("jollity.wg.docked")).toBe(soon)
+      expect(host.store.get("jollity.wg.announced") ?? []).not.toContain(soon)
+    })
+
+    it("docks the game again at its join, between two polls", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      await withChain(chainRead({ running: registeredAt(soon) }), chainRead({ running: registeredAt(soon) }))
+      const host = welcomedHost()
+      holdReminder(host, soon)
+      const tick = await started(host)
+
+      // When
+      vi.useFakeTimers({ now: Date.now(), toFake: ["setTimeout", "clearTimeout", "Date"] })
+      try {
+        const polled = tick(host)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await polled
+        await vi.advanceTimersByTimeAsync(140_000)
+      } finally {
+        vi.useRealTimers()
+      }
+
+      // Then
+      expect(footers(host)).toEqual(["Empty", docked(soon), "Empty", docked(soon)])
+      expect(fedCards(host)).toEqual([])
+    })
+
+    it("empties the footer at the start of the pill and docks the game again at its join with no poll between", async () => {
+      // Given
+      const soon = nowSeconds() + 400
+      await withChain(chainRead({ running: registeredAt(soon) }), chainRead({ running: registeredAt(soon) }))
+      const host = welcomedHost()
+      holdReminder(host, soon)
+      const tick = await started(host)
+      let underPill: unknown[] = []
+
+      // When
+      vi.useFakeTimers({ now: Date.now(), toFake: ["setTimeout", "clearTimeout", "Date"] })
+      try {
+        const polled = tick(host)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await polled
+        await vi.advanceTimersByTimeAsync(40_000)
+        underPill = footers(host)
+        await vi.advanceTimersByTimeAsync(300_000)
+      } finally {
+        vi.useRealTimers()
+      }
+
+      // Then
+      expect(underPill).toEqual(["Empty", docked(soon), "Empty"])
+      expect(footers(host)).toEqual(["Empty", docked(soon), "Empty", docked(soon)])
+      expect(fedCards(host)).toEqual([])
+    })
+
+    it("asks a host that refuses the card at the join once a poll", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      const read = () => chainRead({ running: registeredAt(soon) })
+      await withChain(read(), read(), read())
+      let cards = 0
+      const host = footerHost(vi.fn<WorkerHost["chat"]["setRoomFooter"]>(async (_room, footer) => (footer !== "Empty" && ++cards > 1 ? "failed" : "set")))
+      holdReminder(host, soon)
+      const tick = await started(host)
+      let atJoin = 0
+
+      // When
+      vi.useFakeTimers({ now: Date.now(), toFake: ["setTimeout", "clearTimeout", "Date"] })
+      try {
+        let polled = tick(host)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await polled
+        await vi.advanceTimersByTimeAsync(140_000)
+        atJoin = cards
+        polled = tick(host)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await polled
+        await vi.advanceTimersByTimeAsync(10_000)
+      } finally {
+        vi.useRealTimers()
+      }
+
+      // Then
+      expect(atJoin).toBe(2)
+      expect(cards).toBe(3)
+    })
+
+    it("starts with the footer empty when the game a previous run docked is under the pill of the host", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      await withChain(chainRead({ running: registeredAt(soon) }))
+      const host = welcomedHost()
+      host.store.set("jollity.wg.docked", soon)
+      holdReminder(host, soon)
+
+      // When
+      await started(host)
+
+      // Then
+      expect(footers(host)).toEqual(["Empty"])
+      expect(fedCards(host)).toEqual([])
+    })
+
+    it("empties the footer under the pill on the next poll when the host fails the first try, and posts nothing to the feed", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      await withChain(chainRead({ running: registeredAt(soon) }), chainRead({ running: registeredAt(soon) }))
+      let empties = 0
+      const host = footerHost(vi.fn<WorkerHost["chat"]["setRoomFooter"]>(async (_room, footer) => (footer === "Empty" && ++empties === 2 ? "failed" : "set")))
+      holdReminder(host, soon)
+      const tick = await started(host)
+
+      // When
+      await poll(tick, host)
+
+      // Then
+      expect(footers(host)).toEqual(["Empty", docked(soon), "Empty", "Empty"])
+      expect(fedCards(host)).toEqual([])
+    })
+
+    it("empties the footer under the pill once a sign-up from the chat lands, before the next poll", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      const game = running({ gamePlayTime: soon, registrationEnds: soon - 90, playEnds: soon + 144, reportingEnds: soon + 600 })
+      await withChain(chainRead({ running: game }))
+      await signupEngineWith(async (options) => {
+        options.onBroadcast?.()
+        return { ok: true }
+      })
+      const host = welcomedHost({ accounts: signingAccounts(), entropy: vi.fn().mockResolvedValue(new Uint8Array(32).fill(3)) })
+      vi.mocked(host.game.remindNextGame).mockResolvedValue("held")
+      await started(host)
+      const handler = vi.mocked(host.renderer.onRender).mock.calls[0]![0]
+      let press: ActionListener | undefined
+      handler({ messageId: "m1", messageType: "jollity.gamecard", payload: encPayload({ gamePlayTime: soon }) }, vi.fn(), (listener) => {
+        press = listener
+        return () => {}
+      })
+      await flush()
+
+      // When
+      press!("jollity.register", undefined)
+      await flush()
+
+      // Then
+      expect(footers(host)).toEqual(["Empty", docked(soon), "Empty"])
+      expect(fedCards(host)).toEqual([])
+    })
+
+    it("docks a game that moves while its footer is empty under the pill once", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      await withChain(chainRead({ running: registeredAt(soon) }), chainRead({ running: registeredAt(soon + 3_600) }))
+      const host = welcomedHost()
+      holdReminder(host, soon)
+      const tick = await started(host)
+
+      // When
+      await poll(tick, host)
+
+      // Then
+      expect(footers(host).slice(3)).toEqual([docked(soon + 3_600)])
+    })
+
+    it("keeps the card docked through the last five minutes when the host holds no reminder", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      await withChain(chainRead({ running: registeredAt(soon) }), chainRead({ running: registeredAt(soon) }))
+      const host = welcomedHost()
+      const tick = await started(host)
+
+      // When
+      await poll(tick, host)
+
+      // Then
+      expect(footers(host)).toEqual(["Empty", docked(soon)])
+    })
+
+    it("posts a game the chain calls off under the pill to the feed and empties the footer", async () => {
+      // Given
+      const soon = nowSeconds() + 200
+      await withChain(chainRead({ running: registeredAt(soon) }), chainRead({ running: registeredAt(soon, "cancelled"), upcoming: [] }))
+      const host = welcomedHost()
+      holdReminder(host, soon)
+      const tick = await started(host)
+
+      // When
+      await poll(tick, host)
+
+      // Then
+      expect(fedCards(host)).toEqual([soon])
+      expect(footers(host)).toEqual(["Empty", docked(soon), "Empty", "Empty"])
     })
 
     it("docks the game a previous run docked before the first poll", async () => {
@@ -1627,7 +1840,7 @@ describe("the chain poll works", () => {
     const game = running({ phase: "reporting", registered: true })
     const chain = await withChain(chainRead({ running: game }), chainRead({ running: game }))
     const outcome: StoredOutcome = { cancelled: false, results: RESULTS, gamesToMembership: null, gameIndex: 7, registered: true, memberBefore: false }
-    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "passed", final: true, reported: true, personWeightNeeded: 0 })
+    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "passed", final: true, reported: true, personWeightNeeded: 0, votes: { received: 0, most: 0 } })
     vi.mocked(chain.readOutcome).mockResolvedValue(outcome)
     const { tick } = await import("./index")
     const host = fakeHost()
@@ -1649,7 +1862,7 @@ describe("the chain poll works", () => {
     const game = running({ phase: "reporting", registered: true })
     const chain = await withChain(chainRead({ running: game }))
     const outcome: StoredOutcome = { cancelled: false, results: null, gamesToMembership: 2, gameIndex: 7, registered: true, memberBefore: false }
-    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "failed", final: true, reported, personWeightNeeded: null })
+    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "failed", final: true, reported, personWeightNeeded: null, votes: { received: 0, most: 0 } })
     vi.mocked(chain.readOutcome).mockResolvedValue(outcome)
     const { tick } = await import("./index")
     const host = fakeHost()
@@ -1666,7 +1879,7 @@ describe("the chain poll works", () => {
     const game = running({ phase: "reporting", registered: true })
     const chain = await withChain(chainRead({ running: game }), chainRead({ running: null }))
     const outcome: StoredOutcome = { cancelled: false, results: null, gamesToMembership: 2, gameIndex: 7, registered: true, memberBefore: false }
-    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "pending", final: false, reported: true, personWeightNeeded: 2 })
+    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "pending", final: false, reported: true, personWeightNeeded: 2, votes: { received: 0, most: 0 } })
     vi.mocked(chain.readOutcome).mockResolvedValue(outcome)
     const { tick } = await import("./index")
     const host = fakeHost()
@@ -1685,7 +1898,7 @@ describe("the chain poll works", () => {
     // Given
     const game = running({ phase: "reporting", registered: true })
     const chain = await withChain(chainRead({ running: game }))
-    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "failed", final: true, reported: true, personWeightNeeded: null })
+    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "failed", final: true, reported: true, personWeightNeeded: null, votes: { received: 0, most: 0 } })
     vi.mocked(chain.readOutcome).mockResolvedValue(null)
     const { tick } = await import("./index")
     const host = fakeHost()
@@ -1702,8 +1915,8 @@ describe("the chain poll works", () => {
     const game = running({ phase: "reporting", registered: true })
     const chain = await withChain(chainRead({ running: game }), chainRead({ running: game }))
     vi.mocked(chain.readAttendance)
-      .mockResolvedValueOnce({ gameIndex: 7, verdict: "pending", final: false, reported: true, personWeightNeeded: 2 })
-      .mockResolvedValueOnce({ gameIndex: 7, verdict: "passed", final: false, reported: true, personWeightNeeded: 0 })
+      .mockResolvedValueOnce({ gameIndex: 7, verdict: "pending", final: false, reported: true, personWeightNeeded: 2, votes: { received: 0, most: 0 } })
+      .mockResolvedValueOnce({ gameIndex: 7, verdict: "passed", final: false, reported: true, personWeightNeeded: 0, votes: { received: 0, most: 0 } })
     const { tick } = await import("./index")
     const host = fakeHost()
 
@@ -1714,6 +1927,28 @@ describe("the chain poll works", () => {
     // Then
     expect(chain.readOutcome).not.toHaveBeenCalled()
     expect([...host.store.keys()].filter((key) => key.startsWith("jollity.wg.recap:"))).toEqual([])
+  })
+
+  it("ticks a circle on the pending card for each tenth of the votes the chain has on the player", async () => {
+    // Given
+    const played = nowSeconds() - 300
+    const game = running({ phase: "reporting", registered: true, gamePlayTime: played, registrationEnds: played - 90, playEnds: played + 144, reportingEnds: played + 600 })
+    const chain = await withChain(...Array.from({ length: 8 }, () => chainRead({ running: game })))
+    vi.mocked(chain.readAttendance).mockResolvedValue({ gameIndex: 7, verdict: "pending", final: false, reported: true, personWeightNeeded: 2, votes: { received: 4, most: 8 } })
+    const host = welcomedHost()
+    const handler = await renderHandler(host)
+    const { tick } = await import("./index")
+
+    // When
+    await tick(host)
+    const send = vi.fn()
+    handler({ messageId: "m-votes", messageType: "jollity.gamecard", payload: encPayload({ gamePlayTime: game.gamePlayTime }) }, send, () => () => {})
+    await flush()
+
+    // Then
+    const card = JSON.stringify(send.mock.calls.at(-1)![0])
+    expect(card).toContain("We are still waiting for the votes on you.")
+    expect(card.split("chat-card/vote-tick.png").length - 1).toBe(5)
   })
 
   it("counts the collectibles of an early outcome again on every poll while the game reports", async () => {
@@ -3783,7 +4018,7 @@ describe("the card works", () => {
     teardown?.()
   })
 
-  it("Register signs up from the chat for the game of the card, which says You're in once the sign-up is on the wire", async () => {
+  it("Register signs up from the chat for the game of the card, which says Left to join once the sign-up is on the wire", async () => {
     // Given
     const game = running()
     await withChain(chainRead({ running: game }))
@@ -3813,7 +4048,7 @@ describe("the card works", () => {
       expect.anything(),
     )
     expect(host.navigate).not.toHaveBeenCalled()
-    expect(JSON.stringify(send.mock.calls.at(-1)![0])).toContain("You're in")
+    expect(JSON.stringify(send.mock.calls.at(-1)![0])).toContain("Left to join")
   })
 
   it("Register signs up when the host refuses a past reminder, while preserving the refusal record", async () => {
@@ -3845,7 +4080,7 @@ describe("the card works", () => {
     // Then
     expect(engine.register).toHaveBeenCalled()
     expect(host.store.get("jollity.wg.host-reminder")).toMatchObject({ gamePlayTime: game.gamePlayTime, outcome: "starts-in-past" })
-    expect(JSON.stringify(send.mock.calls.at(-1)![0])).toContain("You're in")
+    expect(JSON.stringify(send.mock.calls.at(-1)![0])).toContain("Left to join")
     expect(JSON.stringify(send.mock.calls)).not.toContain("You just missed this one")
   })
 
@@ -3876,7 +4111,7 @@ describe("the card works", () => {
     const last = JSON.stringify(send.mock.calls.at(-1)![0])
     expect(last).toContain("Couldn't sign you up")
     expect(last).toContain("I'll be there")
-    expect(last).not.toContain("You're in")
+    expect(last).not.toContain("Left to join")
   })
 
   it("keeps the host reminder while a sign-up is on its way, though the chain still reads the player as out", async () => {
@@ -4147,26 +4382,6 @@ describe("the card works", () => {
     expect(host.navigate).toHaveBeenCalled()
     expect(host.game.cancelNextGame).not.toHaveBeenCalled()
     expect(host.store.get("jollity.wg.host-reminder")).toMatchObject({ gamePlayTime: game.gamePlayTime, outcome: "held" })
-  })
-
-  it("draws the card under the pill of the host for the game whose reminder it holds", async () => {
-    // Given
-    const soon = nowSeconds() + 200
-    const game = running({ registered: true, gamePlayTime: soon, registrationEnds: soon - 90, playEnds: soon + 144, reportingEnds: soon + 600, phase: "shuffle" })
-    await withChain(chainRead({ running: game }), chainRead({ running: game }))
-    const host = welcomedHost()
-    host.store.set("jollity.wg.host-reminder", { gamePlayTime: game.gamePlayTime, outcome: "held", startsAt: game.gamePlayTime * 1000 })
-    const handler = await renderHandler(host)
-    const send = vi.fn()
-
-    // When
-    handler({ messageId: "m9", messageType: "jollity.gamecard", payload: encPayload({ gamePlayTime: game.gamePlayTime }) }, send, () => () => {})
-    await flush()
-
-    // Then
-    const drawn = JSON.stringify(send.mock.calls.at(-1)![0])
-    expect(drawn).toContain("Game starting soon")
-    expect(drawn).not.toContain("Left to join")
   })
 
   it("Register signs up for the running game before the card has read the stored games", async () => {
@@ -4644,7 +4859,7 @@ describe("the card works", () => {
       const { card } = await registeredCard(host)
 
       // Then
-      expect(card()).toContain("You're in")
+      expect(card()).toContain("Left to join")
       expect(card()).toContain("Camera is off. Turn it on to play.")
       expect(card()).toContain("Turn on")
       expect(card()).toContain("jollity.turn-on-camera")
@@ -4663,7 +4878,7 @@ describe("the card works", () => {
       const { card } = await registeredCard(host)
 
       // Then
-      expect(card()).toContain("You're in")
+      expect(card()).toContain("Left to join")
       expect(card()).not.toContain("Camera is off")
     })
 
@@ -4681,7 +4896,7 @@ describe("the card works", () => {
       const { card } = await registeredCard(host)
 
       // Then
-      expect(card()).toContain("You're in")
+      expect(card()).toContain("Left to join")
       expect(card()).not.toContain("Camera is off")
     })
 
@@ -4967,9 +5182,9 @@ describe("the card works", () => {
     expect(send).toHaveBeenCalledTimes(1)
   })
 
-  describe("the Not registered face", () => {
+  describe("the blocked Register face", () => {
     const REFUSAL = "HostFailure: alarms and notifications are both turned off"
-    const NOTICE = "Enable notifications to register."
+    const NOTICE = "Enable notifications to join game."
 
     type DrawnNode = { tag: string; value?: { text?: string; props?: { clickAction?: string; enabled?: boolean }; children?: DrawnNode[] } }
     const childrenOf = (node: DrawnNode) => node.value?.children ?? []
@@ -5007,7 +5222,7 @@ describe("the card works", () => {
 
       // Then
       const card = send.mock.calls.at(-1)![0] as DrawnNode
-      expect(draws(card, "Not registered")).toBe(true)
+      expect(draws(card, "Next game")).toBe(true)
       expect(draws(card, NOTICE)).toBe(true)
       expect(JSON.stringify(card)).toContain("chat-card/bell-off.png")
       expect(draws(card, "Enable")).toBe(false)
@@ -5045,7 +5260,7 @@ describe("the card works", () => {
       await flush()
       press!("jollity.register", undefined)
       for (let step = 0; step < 6; step++) await flush()
-      expect(draws(send.mock.calls.at(-1)![0] as DrawnNode, "Not registered")).toBe(true)
+      expect(draws(send.mock.calls.at(-1)![0] as DrawnNode, NOTICE)).toBe(true)
       notificationsGranted = true
 
       // When
@@ -5055,8 +5270,8 @@ describe("the card works", () => {
       // Then
       expect(engine.register).toHaveBeenCalledTimes(1)
       const card = send.mock.calls.at(-1)![0] as DrawnNode
-      expect(draws(card, "Not registered")).toBe(false)
-      expect(JSON.stringify(card)).toContain("You're in")
+      expect(draws(card, NOTICE)).toBe(false)
+      expect(JSON.stringify(card)).toContain("Left to join")
     })
   })
 })
@@ -5144,7 +5359,7 @@ describe("the reminder gate of Register works", () => {
     const held = await remindersInPlace(host, read, true)
 
     // Then
-    expect(refused).toBe("Enable notifications to register.")
+    expect(refused).toBe("Enable notifications to join game.")
     expect(asksOfTheFirstTap).toBe(2)
     expect(held).toBeNull()
     expect(host.game.remindNextGame).toHaveBeenCalledTimes(3)
@@ -5322,7 +5537,7 @@ describe("the reminder gate of Register works", () => {
       }
 
       // Then
-      expect(notice).toBe("Enable notifications to register.")
+      expect(notice).toBe("Enable notifications to join game.")
       expect(hostHolds).toBe(false)
     } finally {
       vi.useRealTimers()
@@ -5479,7 +5694,7 @@ describe("the reminder gate of Register works", () => {
     const notice = await remindersInPlace(host, unregistered(), true)
 
     // Then
-    expect(notice).toBe("Enable notifications to register.")
+    expect(notice).toBe("Enable notifications to join game.")
     expect(host.game.remindNextGame).toHaveBeenCalledTimes(2)
   })
 
@@ -5516,7 +5731,7 @@ describe("the reminder gate of Register works", () => {
     const notice = await remindersInPlace(host, unregistered(), true)
 
     // Then
-    expect(notice).toBe("Update to new version to register.")
+    expect(notice).toBe("Update to new version to join game.")
     expect(host.notifications.push).not.toHaveBeenCalled()
   })
 
@@ -5628,7 +5843,7 @@ describe("the reminder gate of Register works", () => {
     const notice = await remindersInPlace(host, unregistered(), false)
 
     // Then
-    expect(notice).toBe("Enable notifications to register.")
+    expect(notice).toBe("Enable notifications to join game.")
   })
 
   it("says the sign-up failed while the game cannot be read", async () => {
@@ -5656,8 +5871,8 @@ describe("the reminder gate of Register works", () => {
   })
 
   it.each([
-    ["the host cannot remind", "unsupported", "Update to new version to register.", "reminders-unsupported", "update"],
-    ["the player refuses the reminder", "denied", "Enable notifications to register.", "reminders-denied", "notifications"],
+    ["the host cannot remind", "unsupported", "Update to new version to join game.", "reminders-unsupported", "update"],
+    ["the player refuses the reminder", "denied", "Enable notifications to join game.", "reminders-denied", "notifications"],
   ] as const)("keeps the game product from registering when %s on the ask after a refused claim", async (_name, answer, notice, reason, needs) => {
     // Given
     const { remindersInPlace } = await import("./index")
@@ -5768,7 +5983,7 @@ describe("the reminder gate of Register works", () => {
 
     // Then
     expect(host.permissions.requestDevice).toHaveBeenCalledWith("Notifications")
-    expect(notice).toBe("Enable notifications to register.")
+    expect(notice).toBe("Enable notifications to join game.")
     expect(reportBlocked).toHaveBeenCalledWith("no-record", "notifications")
   })
 })
@@ -6473,7 +6688,7 @@ describe("the worker's telemetry is sent", () => {
     // Then
     expect(claimPrize).toHaveBeenCalledTimes(1)
     expect(engine.register).toHaveBeenCalledTimes(2)
-    expect(JSON.stringify(send.mock.calls.at(-1)![0])).toContain("You're in")
+    expect(JSON.stringify(send.mock.calls.at(-1)![0])).toContain("Left to join")
     expect(events.filter((record) => record.tags["failure.kind"] === "signup-failed")).toEqual([])
   })
 
@@ -6947,7 +7162,7 @@ describe("the worker's telemetry is sent", () => {
     expect(blocked.map((event) => [event.tags.reason, event.tags.retried])).toEqual([["ask-failed", "true"]])
   })
 
-  it("draws Not registered and the way back on the card after a Register tap the failed ask blocked", async () => {
+  it("draws the notifications line and the way back on the card after a Register tap the failed ask blocked", async () => {
     // Given
     const events = await capture()
     const game = running({ registered: false })
@@ -6971,9 +7186,9 @@ describe("the worker's telemetry is sent", () => {
     // Then
     expect(metrics(events, "chat.register.blocked").map((event) => event.tags.reason)).toEqual(["ask-failed"])
     const card = JSON.stringify(send.mock.calls.at(-1)![0])
-    expect(card).toContain("Not registered")
-    expect(card).toContain("Enable notifications to register.")
-    expect(card).not.toContain("Next game")
+    expect(card).toContain("Next game")
+    expect(card).toContain("Enable notifications to join game.")
+    expect(card).not.toContain("Not registered")
     expect(card).toContain("jollity.register")
   })
 
@@ -7009,7 +7224,7 @@ describe("the worker's telemetry is sent", () => {
   })
 
   describe("while the camera is asked", () => {
-    const BUSY_REGISTER = '"loading":true'
+    const BUSY_REGISTER = "Left to join"
 
     async function registerCard() {
       let answer: (granted: boolean | undefined) => void = () => {}
