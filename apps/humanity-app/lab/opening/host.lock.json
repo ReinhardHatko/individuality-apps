@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "official": {
-    "version": "0.31.0",
-    "release": "@parity/truapi@0.31.0",
+    "version": "0.32.0",
+    "release": "@parity/truapi@0.32.0",
     "archives": {
-      "aarch64-apple-darwin": "587a9f6e16394dbced3b33176923c4adb36217b44c4cf5247f825031a8372940",
-      "x86_64-unknown-linux-musl": "f97e97c0c65d5eff1b77b4a9862e52746af3ffd06f040cfabcf115ae78cbe3a4"
+      "aarch64-apple-darwin": "de5e7a6e03845d41387b301b6b93e3abdfff1593c5d54eef4745d004f192a846",
+      "x86_64-unknown-linux-musl": "c3581fc126a4485cd98105665e7314632e27e9e593cd41e423498cdf19eb9383"
     },
     "provides": [
       "localNetwork"
