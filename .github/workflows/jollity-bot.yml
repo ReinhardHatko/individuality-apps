@@ -1,0 +1,228 @@
+# Copyright 2026 Parity Technologies (UK) Ltd.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Jollity bot
+
+# A bot plays Jollity on a live network, on the host and the network the caller names. One workflow for every host,
+# so that another workflow (a nightly, a check after a deployment) calls it once per host and gets the same run.
+#
+#   host      android   the Polkadot app on an emulator, a person onboarded in the job
+#             cli       two people on the truAPI CLI host, Jollity built from this checkout
+#             ios       not built yet (web and desktop come after it)
+#   network   paseo-next-v2 or previewnet
+#   mode      game        signs up for one game, plays it, and reads the report from the People chain
+#             rehearsal   opens Jollity, gives it its permissions and reads its page; any time of day
+#
+# What runs today, and what the plan job refuses with its reason:
+#
+#   android + paseo-next-v2   rehearsal and game. The app's nightly build is a public prerelease.
+#   cli     + previewnet      game. Nobody else plays there, so the two people play each other.
+#   android + previewnet      refused: the app's Previewnet build is published nowhere a job can fetch it.
+#   cli     + paseo-next-v2   refused: not built yet.
+#   ios                       refused: not built yet.
+#
+# One game for a whole run: a game run takes `play_time` (Unix seconds), or picks the first game far enough away
+# itself (ci/plan-game.mts). A caller with several hosts plans once and hands every call the same time, and each lab
+# then takes that game and no other.
+#
+# Never a required check: every run claims usernames on the live network, and on Paseo Next V2 a game run puts a bot
+# into a game real people play. No picture is taken and no video recorded; the artifacts are text.
+on:
+  workflow_call:
+    inputs:
+      host: { type: string, required: true }
+      network: { type: string, required: true }
+      mode: { type: string, default: game }
+      play_time: { type: string, default: "" }
+      product: { type: string, default: "" }
+      lead_seconds: { type: string, default: "1500" }
+    outputs:
+      play_time:
+        description: The play time (Unix seconds) of the game the run took
+        value: ${{ jobs.plan.outputs.play_time }}
+  workflow_dispatch:
+    inputs:
+      host:
+        description: The host the bot runs on
+        type: choice
+        options: [android, cli, ios]
+        default: android
+      network:
+        description: The live network
+        type: choice
+        options: [paseo-next-v2, previewnet]
+        default: paseo-next-v2
+      mode:
+        description: What to run
+        type: choice
+        options: [game, rehearsal]
+        default: rehearsal
+      play_time:
+        description: "game: the game's play time in Unix seconds; empty picks the first game at least lead_seconds away"
+        type: string
+        default: ""
+      product:
+        description: "The published name to open instead of the network's Jollity (a pull request's preview); phones only"
+        type: string
+        default: ""
+      lead_seconds:
+        description: "game without play_time: how far away the game has to be (the setup and the sign-up take about 20 minutes)"
+        type: string
+        default: "1500"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan (${{ inputs.host }}, ${{ inputs.network }}, ${{ inputs.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      play_time: ${{ steps.game.outputs.play_time || inputs.play_time }}
+    env:
+      HOST: ${{ inputs.host }}
+      NETWORK: ${{ inputs.network }}
+      MODE: ${{ inputs.mode }}
+      PLAY_TIME: ${{ inputs.play_time }}
+      PRODUCT: ${{ inputs.product }}
+      LEAD: ${{ inputs.lead_seconds }}
+    steps:
+      - name: Is there a bot for this host on this network
+        run: |
+          refuse() { echo "::error title=No $HOST bot on $NETWORK ($MODE)::$1"; exit 1; }
+          [[ "$NETWORK" == paseo-next-v2 || "$NETWORK" == previewnet ]] || refuse "Unknown network '$NETWORK'."
+          [[ "$MODE" == game || "$MODE" == rehearsal ]] || refuse "Unknown mode '$MODE'."
+          [[ -z "$PLAY_TIME" || "$PLAY_TIME" =~ ^[0-9]{9,11}$ ]] || refuse "play_time is Unix seconds, got '$PLAY_TIME'."
+          [[ "$LEAD" =~ ^[0-9]{1,5}$ ]] || refuse "lead_seconds is a number of seconds, got '$LEAD'."
+          [[ -z "$PRODUCT" || "$PRODUCT" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.(testnet|paseo)$ ]] || refuse "product is a published name such as dim2-pr12-sandbox00.testnet, got '$PRODUCT'."
+          case "$HOST+$NETWORK" in
+            android+paseo-next-v2) ;;
+            cli+previewnet) [[ "$MODE" == game ]] || refuse "The CLI leg plays a game; it has no rehearsal." ;;
+            android+previewnet) refuse "The Polkadot app's Previewnet build (Android debug) goes to Firebase App Distribution only: no job can fetch it. The nightly is Paseo Next V2's and takes no other network." ;;
+            cli+paseo-next-v2) refuse "The CLI leg on Paseo Next V2 is not built yet." ;;
+            ios+*) refuse "The iOS leg is not built yet." ;;
+            *) refuse "Unknown host '$HOST'." ;;
+          esac
+          [[ -z "$PRODUCT" ]] || refuse "Opening another published name (product) is not built yet: no host has opened a pull request's preview so far."
+          echo "A $HOST bot on $NETWORK, mode $MODE."
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: inputs.mode == 'game' && inputs.play_time == ''
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: inputs.mode == 'game' && inputs.play_time == ''
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+        if: inputs.mode == 'game' && inputs.play_time == ''
+      - name: Pick the game
+        id: game
+        if: inputs.mode == 'game' && inputs.play_time == ''
+        run: node --import tsx lab/previewnet-poc/ci/plan-game.mts "$NETWORK" "$LEAD"
+
+  android:
+    name: Android bot (${{ inputs.network }}, ${{ inputs.mode }})
+    needs: plan
+    if: inputs.host == 'android'
+    runs-on: ${{ vars.JOLLITY_PHONE_RUNNER || 'ubuntu-24.04' }}
+    # A game run: the wait for the game, the game and its reporting (about 30 minutes), and the setup.
+    timeout-minutes: 150
+    env:
+      APK_REPO: paritytech/trinity-user-agents
+      APK_ASSET: app-gp-nightly.apk
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Record capacity
+        run: |
+          nproc
+          free -m
+          df -h /
+          ls -l /dev/kvm || echo "no /dev/kvm"
+      - run: npm ci
+      # The lab starts its own browser with the environment, also when every person is on a phone.
+      - name: Install the lab's browser
+        run: npx playwright install --with-deps chromium
+      - name: Download the Polkadot app's nightly APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api "repos/$APK_REPO/releases?per_page=40" --jq '[.[] | select(.tag_name | startswith("android-")) | select(.draft | not)][0].tag_name')
+          [ -n "$tag" ] && [ "$tag" != null ] || { echo "::error::No android-* release found in $APK_REPO"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/apk"
+          gh release download "$tag" --repo "$APK_REPO" --pattern "$APK_ASSET" --dir "$RUNNER_TEMP/apk"
+          echo "APK=$RUNNER_TEMP/apk/$APK_ASSET" >> "$GITHUB_ENV"
+          echo "APK: $tag, $(du -h "$RUNNER_TEMP/apk/$APK_ASSET" | cut -f1), sha256 $(sha256sum "$RUNNER_TEMP/apk/$APK_ASSET" | cut -c1-16)…"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run the bot on an emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          MODE: ${{ inputs.mode }}
+          PLAY_TIME: ${{ needs.plan.outputs.play_time }}
+          OUT: ${{ github.workspace }}/artifacts/phone-bot
+        with:
+          # The app registers a person through the identity backend, which asks Play Integrity: a Play Store image.
+          api-level: 35
+          target: google_apis_playstore
+          arch: x86_64
+          # A profile the runner's SDK has (it has no pixel_8): 1080 by 2220 at 440 dpi.
+          profile: pixel_3a
+          ram-size: 4096M
+          heap-size: 1024M
+          disk-size: 6144M
+          # Jollity keeps its door shut without a camera, and an AVD's front camera is off unless it is given one.
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-load -gpu swiftshader_indirect -dns-server 8.8.8.8,8.8.4.4 -camera-front emulated -camera-back emulated
+          emulator-boot-timeout: 1500
+          disable-animations: true
+          script: bash lab/previewnet-poc/ci/android-phone-bot.sh "$MODE" "$APK" "$PLAY_TIME"
+      - name: Upload the run's logs and reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jollity-bot-android-${{ inputs.network }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phone-bot
+          if-no-files-found: warn
+          retention-days: 14
+
+  cli:
+    name: CLI bots (${{ inputs.network }}, ${{ inputs.mode }})
+    needs: plan
+    if: inputs.host == 'cli'
+    runs-on: ${{ vars.JOLLITY_LAB_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Record capacity
+        run: |
+          nproc
+          free -m
+          df -h /
+      - run: npm ci
+      - name: Install the lab's browser
+        run: npx playwright install --with-deps chromium
+      - name: Run the bots
+        env:
+          NETWORK: ${{ inputs.network }}
+          MODE: ${{ inputs.mode }}
+          PLAY_TIME: ${{ needs.plan.outputs.play_time }}
+          OUT: ${{ github.workspace }}/artifacts/cli-bot
+          # The truAPI CLI host is a release of a public repository; the token only spares the anonymous rate limit.
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash lab/previewnet-poc/ci/cli-bot.sh "$NETWORK" "$MODE" "$PLAY_TIME"
+      - name: Upload the run's logs and reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: jollity-bot-cli-${{ inputs.network }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/cli-bot
+          if-no-files-found: warn
+          retention-days: 14

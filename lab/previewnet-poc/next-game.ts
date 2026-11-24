@@ -21,6 +21,14 @@ type Game = { index: number; game_date: number; state: { type: string } };
 type Schedule = { game_play_time: number };
 /** Live games come every 20 minutes, and a window opens when the previous game clears. */
 const NEXT_GAME_WAIT_MS = 25 * 60_000;
+/**
+ * One game for every lab of a run, when the run names it (`PREVIEWNET_POC_GAME_TIME`, the game's play time in Unix
+ * seconds): people in separate labs, on separate machines, each waiting for "the next game" would part at a
+ * 20-minute boundary. A lab with a pinned game takes that game and no other. It may open late (the game before it is
+ * reported first), so the room it asks for is what one sign-up was seen to need, not the ten minutes of a free choice.
+ */
+const pinned = /^\d{9,11}$/.test(process.env.PREVIEWNET_POC_GAME_TIME ?? '') ? Number(process.env.PREVIEWNET_POC_GAME_TIME) : undefined;
+const PINNED_NEEDS_S = 240;
 
 const read = async (access: PapiChainAccess, item: string, pallet: string, hash: string) =>
   access.historicalStorage(pallet, item, [], hash, { orDefault: true });
@@ -34,7 +42,7 @@ export const nextGameIn = (playsInS: number) => defineAction({
   via: 'chain',
   sentences: ['the next game is open for sign-up'],
   async run(context) {
-    const state = world(), deadline = Date.now() + NEXT_GAME_WAIT_MS;
+    const state = world(), deadline = pinned ? pinned * 1000 : Date.now() + NEXT_GAME_WAIT_MS;
     let last: Record<string, unknown> = {}, scheduled: Record<string, unknown> | undefined;
     let said = '';
     for (;;) {
@@ -50,7 +58,16 @@ export const nextGameIn = (playsInS: number) => defineAction({
       last = { head, game, schedules, chainTime: now, secondsToGame: left, ...(scheduled ? { scheduledByTheLab: scheduled } : {}) };
       const seen = `game ${game ? `${game.index} ${game.state.type}, plays in ${left} s` : 'none'}; ${(schedules ?? []).length} scheduled`;
       if (seen !== said) context.progress(`People #${head.number}: ${said = seen}`);
-      if (game?.state.type === 'Registration' && left !== undefined && left >= SIGN_UP_NEEDS_S) {
+      if (pinned) {
+        last = { ...last, pinnedGameTime: pinned };
+        if (game && game.game_date > pinned) fail('not-on-chain', `The game this run was pinned to (${new Date(pinned * 1000).toISOString()}) has passed: the chain is at game ${game.index}, which plays at ${new Date(game.game_date * 1000).toISOString()}`);
+        if (game?.game_date === pinned && game.state.type !== 'Registration') fail('not-on-chain', `The pinned game ${game.index} is in ${game.state.type}: its sign-up is closed`);
+        if (game?.game_date === pinned && left !== undefined) {
+          if (left < PINNED_NEEDS_S) fail('not-on-chain', `The pinned game ${game.index} opened with ${left} s to its play time: too little for a sign-up`);
+          state.evidence.push({ nextGame: last });
+          return last;
+        }
+      } else if (game?.state.type === 'Registration' && left !== undefined && left >= SIGN_UP_NEEDS_S) {
         state.evidence.push({ nextGame: last });
         return last;
       }
@@ -71,6 +88,7 @@ export const nextGameIn = (playsInS: number) => defineAction({
       await delay(6_000, undefined, { signal: context.signal });
     }
     state.evidence.push({ nextGame: last });
+    if (pinned) fail('not-on-chain', `The pinned game (${new Date(pinned * 1000).toISOString()}) never opened for sign-up: ${JSON.stringify(last, (_, value) => typeof value === 'bigint' ? value.toString() : value).slice(0, 600)}`);
     fail('not-on-chain', `No game opened for sign-up with ${SIGN_UP_NEEDS_S} s to spare within ${NEXT_GAME_WAIT_MS / 60_000} minutes: ${JSON.stringify(last, (_, value) => typeof value === 'bigint' ? value.toString() : value).slice(0, 600)}`);
   },
 });

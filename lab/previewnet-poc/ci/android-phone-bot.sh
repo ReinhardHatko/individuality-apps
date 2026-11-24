@@ -6,7 +6,8 @@
 # onboards a new person in it, and runs the phone lab as her on live Paseo Next V2.
 #
 #   android-phone-bot.sh rehearsal <apk>                 Jollity's permissions and a read of its page; any time of day
-#   android-phone-bot.sh game <apk> <game time, HH:MM>   the same person signs up for the game at that UTC time and plays it
+#   android-phone-bot.sh game <apk> <play time>          the same person signs up for the game that plays at that time
+#                                                        (Unix seconds, from ci/plan-game.mts) and plays it
 #
 # (A game on a phone is over about three minutes after it begins: Paseo game 364.)
 # The emulator is the one the workflow booted (ANDROID_SERIAL, default emulator-5554). Run from the repository root.
@@ -21,7 +22,7 @@ set -euo pipefail
 export PREVIEWNET_POC_PICTURES=off PRODUCT_LAB_RECORDINGS=off
 unset PRODUCT_LAB_RECORDINGS_VIDEO
 
-mode="${1:?rehearsal or game}"; apk="${2:?path of the APK}"; game_time="${3:-}"
+mode="${1:?rehearsal or game}"; apk="${2:?path of the APK}"; play_time="${3:-}"
 serial="${ANDROID_SERIAL:-emulator-5554}"
 out="${OUT:-artifacts/phone-bot}"; mkdir -p "$out"
 config=lab/previewnet-poc/lab.paseo-phone.config.ts
@@ -30,22 +31,20 @@ say() { echo "[phone-bot $(date -u +%H:%M:%S)Z] $*"; }
 case "$mode" in
   rehearsal) features=(lab/previewnet-poc/phone-permissions.feature lab/previewnet-poc/phone-rehearsal.feature) ;;
   game)
-    [[ "$game_time" =~ ^[0-2][0-9]:[0-5][0-9]$ ]] || { echo "A game run needs the game's UTC time as HH:MM, got '$game_time'" >&2; exit 2; }
+    [[ "$play_time" =~ ^[0-9]{9,11}$ ]] || { echo "A game run needs the game's play time in Unix seconds, got '$play_time'" >&2; exit 2; }
+    # The lab takes this game and no other, as every other leg of the run does (next-game.ts).
+    export PREVIEWNET_POC_GAME_TIME="$play_time"
     features=(lab/previewnet-poc/phone-game.feature) ;;
   *) echo "Unknown mode '$mode'" >&2; exit 2 ;;
 esac
 
-# Seconds from now to the next HH:MM UTC (today's, or tomorrow's when today's has passed by more than an hour).
-seconds_to() {
-  local now target; now=$(date -u +%s); target=$(date -u -d "$(date -u +%F) $1:00" +%s)
-  (( target < now - 3600 )) && target=$(( target + 86400 ))
-  echo $(( target - now ))
-}
+seconds_to() { echo $(( $1 - $(date -u +%s) )); }
+at() { date -u -d "@$1" +%H:%M 2>/dev/null || date -u -r "$1" +%H:%M; }
 if [[ "$mode" == game ]]; then
-  left=$(seconds_to "$game_time")
-  # Setting the phone up takes some minutes; with less than 20 to the game the sign-up would run out of its window.
-  (( left >= 1200 )) || { echo "The $game_time UTC game is $(( left / 60 )) minutes away: a game run has to start at least 20 minutes before it" >&2; exit 2; }
-  say "the game is at $game_time UTC, in $(( left / 60 )) minutes"
+  left=$(seconds_to "$play_time")
+  # Setting the phone up takes some minutes; with less than 12 to the game the sign-up would run out of its window.
+  (( left >= 720 )) || { echo "The $(at "$play_time") UTC game is $(( left / 60 )) minutes away: a game run has to start at least 12 minutes before it" >&2; exit 2; }
+  say "the game is at $(at "$play_time") UTC, in $(( left / 60 )) minutes"
 fi
 
 # A just-booted emulator answers adb before its package manager does.
@@ -80,8 +79,8 @@ if [[ "$mode" == game ]]; then
   # The page is read once before the wait, so that a phone that cannot be read fails now and not at game time.
   run_lab rehearsal lab/previewnet-poc/phone-permissions.feature lab/previewnet-poc/phone-rehearsal.feature || { say "the rehearsal failed: no game run"; status=1; }
   if (( status == 0 )); then
-    left=$(seconds_to "$game_time"); wait=$(( left - 1500 ))
-    (( left >= 720 )) || { say "only $(( left / 60 )) minutes to the game after the setup: too late to sign up"; status=1; }
+    left=$(seconds_to "$play_time"); wait=$(( left - 1500 ))
+    (( left >= 480 )) || { say "only $(( left / 60 )) minutes to the game after the setup: too late to sign up"; status=1; }
     if (( status == 0 )); then
       if (( wait > 0 )); then say "waiting $(( wait / 60 )) minutes, to 25 minutes before the game"; sleep "$wait"; fi
       run_lab game "${features[@]}" || status=$?
