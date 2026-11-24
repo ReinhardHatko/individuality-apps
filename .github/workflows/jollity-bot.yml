@@ -69,13 +69,26 @@ on:
         description: "game without play_time: how far away the game has to be (the setup and the sign-up take about 20 minutes)"
         type: string
         default: "1500"
+  # TRIAL ONLY, to go before this file reaches main: a fork dispatches a workflow that is not on its default branch
+  # only after some event has run it once. A push to the trial branch is that event, and it runs no bot.
+  push:
+    branches: [ci/jollity-phone-bot-trial]
 
 permissions:
   contents: read
 
 jobs:
+  registered:
+    name: Registered for dispatch
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - run: echo "This push only makes the workflow known to this repository. Start a bot with a dispatch."
+
   plan:
     name: Plan (${{ inputs.host }}, ${{ inputs.network }}, ${{ inputs.mode }})
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
