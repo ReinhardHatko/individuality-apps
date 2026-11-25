@@ -219,8 +219,10 @@ jobs:
     name: iOS bot (${{ inputs.network }}, ${{ inputs.mode }})
     needs: plan
     if: inputs.host == 'ios'
-    # Apple silicon: the app's simulator build is arm64 only.
-    runs-on: ${{ vars.JOLLITY_IOS_RUNNER || 'macos-15' }}
+    # Apple silicon: the app's simulator build is arm64 only. In Parity's organisation the job asks for Parity's own
+    # Mac runner, the one triangle-e2e's iOS shard runs on: GitHub's hosted macOS runners gave a fork's job no runner at
+    # all on 25 November 2026, twice. Elsewhere (a fork) it is GitHub's; the variable overrides both.
+    runs-on: ${{ vars.JOLLITY_IOS_RUNNER || (github.repository_owner == 'paritytech' && 'parity-macos-large' || 'macos-15') }}
     timeout-minutes: 150
     env:
       APP_REPO: paritytech/trinity-user-agents
