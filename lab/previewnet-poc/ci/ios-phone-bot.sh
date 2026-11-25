@@ -71,7 +71,10 @@ finish() {
   xcrun simctl delete "$udid" 2>/dev/null || true
 }
 trap finish EXIT
-xcrun simctl boot "$udid"
+# Booted with the Simulator app's window, not headless: Appium's driver restarts a simulator whose window it cannot
+# see, and on a runner that restart outlasted its two minutes (GitHub's macos-15, 24 November 2026: "did not finish
+# booting within 120000ms").
+open -Fgn "$(xcode-select -p)/Applications/Simulator.app" --args -CurrentDeviceUDID "$udid"
 xcrun simctl bootstatus "$udid" -b > /dev/null
 say "installing $(basename "$app") ($bundle)"
 xcrun simctl install "$udid" "$app"

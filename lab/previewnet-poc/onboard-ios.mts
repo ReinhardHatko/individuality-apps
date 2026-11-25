@@ -161,7 +161,9 @@ try {
   session = (await call('POST', '/session', { capabilities: { alwaysMatch: {
     platformName: 'iOS', 'appium:automationName': 'XCUITest', 'appium:udid': udid, 'appium:bundleId': bundle, 'appium:noReset': true,
     'appium:wdaLocalPort': Number(process.env.WDA_PORT ?? 8192), 'appium:newCommandTimeout': 900, 'appium:wdaLaunchTimeout': 600_000, 'appium:waitForIdleTimeout': 0,
-  } } }, 660_000)).sessionId as string;
+    // A runner's simulator is slow to come up; the driver's own two minutes were not enough for it there.
+    'appium:simulatorStartupTimeout': 600_000,
+  } } }, 1_300_000)).sessionId as string;
   await onboard(session);
   const username = await heldUsername();
   if (!username || !username.startsWith(`${base}.`)) throw Error(`The app's preferences hold ${username ? `the username ${username}` : 'no username'}, not one from the base ${base}`);

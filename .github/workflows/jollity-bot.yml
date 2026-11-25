@@ -39,6 +39,7 @@ on:
       play_time: { type: string, default: "" }
       product: { type: string, default: "" }
       lead_seconds: { type: string, default: "1500" }
+      app_tag: { type: string, default: "" }
     outputs:
       play_time:
         description: The play time (Unix seconds) of the game the run took
@@ -72,6 +73,10 @@ on:
         description: "game without play_time: how far away the game has to be (the setup and the sign-up take about 20 minutes)"
         type: string
         default: "1500"
+      app_tag:
+        description: "phones: the prerelease of trinity-user-agents to install (android-… or simulator-…); empty for the newest"
+        type: string
+        default: ""
   # TRIAL ONLY, to go before this file reaches main: a fork dispatches a workflow that is not on its default branch
   # only after some event has run it once. A push to the trial branch is that event, and it runs no bot.
   push:
@@ -103,6 +108,7 @@ jobs:
       PLAY_TIME: ${{ inputs.play_time }}
       PRODUCT: ${{ inputs.product }}
       LEAD: ${{ inputs.lead_seconds }}
+      APP_TAG: ${{ inputs.app_tag }}
     steps:
       - name: Is there a bot for this host on this network
         run: |
@@ -111,6 +117,8 @@ jobs:
           [[ "$MODE" == game || "$MODE" == rehearsal ]] || refuse "Unknown mode '$MODE'."
           [[ -z "$PLAY_TIME" || "$PLAY_TIME" =~ ^[0-9]{9,11}$ ]] || refuse "play_time is Unix seconds, got '$PLAY_TIME'."
           [[ "$LEAD" =~ ^[0-9]{1,5}$ ]] || refuse "lead_seconds is a number of seconds, got '$LEAD'."
+          [[ -z "$APP_TAG" || "$APP_TAG" =~ ^(android|simulator)-[0-9]{8}-[0-9]{4}-[0-9a-f]{7,40}$ ]] || refuse "app_tag is a prerelease tag such as android-20261123-2248-97a6675, got '$APP_TAG'."
+          [[ -z "$APP_TAG" || ( "$HOST" == android && "$APP_TAG" == android-* ) || ( "$HOST" == ios && "$APP_TAG" == simulator-* ) ]] || refuse "app_tag '$APP_TAG' is not a build for the $HOST host."
           [[ -z "$PRODUCT" || "$PRODUCT" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.(testnet|paseo)$ ]] || refuse "product is a published name such as dim2-pr12-sandbox00.testnet, got '$PRODUCT'."
           case "$HOST+$NETWORK" in
             android+paseo-next-v2) ;;
@@ -163,8 +171,10 @@ jobs:
       - name: Download the Polkadot app's nightly APK
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_TAG: ${{ inputs.app_tag }}
         run: |
-          tag=$(gh api "repos/$APK_REPO/releases?per_page=40" --jq '[.[] | select(.tag_name | startswith("android-")) | select(.draft | not)][0].tag_name')
+          tag="$APP_TAG"
+          [ -n "$tag" ] || tag=$(gh api "repos/$APK_REPO/releases?per_page=40" --jq '[.[] | select(.tag_name | startswith("android-")) | select(.draft | not)][0].tag_name')
           [ -n "$tag" ] && [ "$tag" != null ] || { echo "::error::No android-* release found in $APK_REPO"; exit 1; }
           mkdir -p "$RUNNER_TEMP/apk"
           gh release download "$tag" --repo "$APK_REPO" --pattern "$APK_ASSET" --dir "$RUNNER_TEMP/apk"
@@ -237,8 +247,10 @@ jobs:
       - name: Download the Polkadot app's simulator build
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_TAG: ${{ inputs.app_tag }}
         run: |
-          tag=$(gh api "repos/$APP_REPO/releases?per_page=40" --jq '[.[] | select(.tag_name | startswith("simulator-")) | select(.draft | not)][0].tag_name')
+          tag="$APP_TAG"
+          [ -n "$tag" ] || tag=$(gh api "repos/$APP_REPO/releases?per_page=40" --jq '[.[] | select(.tag_name | startswith("simulator-")) | select(.draft | not)][0].tag_name')
           [ -n "$tag" ] && [ "$tag" != null ] || { echo "::error::No simulator-* release found in $APP_REPO"; exit 1; }
           mkdir -p "$RUNNER_TEMP/app"
           gh release download "$tag" --repo "$APP_REPO" --pattern "$APP_ASSET" --dir "$RUNNER_TEMP"
