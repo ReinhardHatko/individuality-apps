@@ -48,15 +48,16 @@ const say = (line: string) => console.log(`[onboard ${udid.slice(0, 8)}] ${line}
 
 /** One call to Appium. Over node:http, which waits as long as it is told: the first session builds WebDriverAgent. */
 function call(method: string, path: string, body?: unknown, timeoutMs = 60_000) {
-  return new Promise<any>((resolve, reject) => {
+  return new Promise<unknown>((resolve, reject) => {
     const data = body === undefined ? undefined : JSON.stringify(body);
     const request = http.request(appium + path, { method, timeout: timeoutMs, headers: data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {} }, answer => {
       let text = '';
       answer.on('data', chunk => (text += chunk));
       answer.on('end', () => {
-        let json: any;
-        try { json = JSON.parse(text); } catch { reject(Error(`Appium answered HTTP ${answer.statusCode} without JSON: ${text.slice(0, 200)}`)); return; }
-        if ((answer.statusCode ?? 500) >= 400) reject(Error(`${json.value?.error}: ${String(json.value?.message).slice(0, 300)}`)); else resolve(json.value);
+        let json: { value?: unknown };
+        try { json = JSON.parse(text) as { value?: unknown }; } catch { reject(Error(`Appium answered HTTP ${answer.statusCode} without JSON: ${text.slice(0, 200)}`)); return; }
+        const refusal = json.value as { error?: unknown; message?: unknown } | null | undefined;
+        if ((answer.statusCode ?? 500) >= 400) reject(Error(`${String(refusal?.error)}: ${String(refusal?.message).slice(0, 300)}`)); else resolve(json.value);
       });
     });
     request.on('timeout', () => request.destroy(Error(`Appium did not answer ${method} ${path} in ${timeoutMs / 1000} s`)));
@@ -158,12 +159,12 @@ let session: string | undefined;
 try {
   say(`opening ${bundle} through ${appium}; the username base is ${base}`);
   // The first session on a simulator builds and starts WebDriverAgent, which can take minutes on a CI runner.
-  session = (await call('POST', '/session', { capabilities: { alwaysMatch: {
+  session = ((await call('POST', '/session', { capabilities: { alwaysMatch: {
     platformName: 'iOS', 'appium:automationName': 'XCUITest', 'appium:udid': udid, 'appium:bundleId': bundle, 'appium:noReset': true,
     'appium:wdaLocalPort': Number(process.env.WDA_PORT ?? 8192), 'appium:newCommandTimeout': 900, 'appium:wdaLaunchTimeout': 600_000, 'appium:waitForIdleTimeout': 0,
     // A runner's simulator is slow to come up; the driver's own two minutes were not enough for it there.
     'appium:simulatorStartupTimeout': 600_000,
-  } } }, 1_300_000)).sessionId as string;
+  } } }, 1_300_000)) as { sessionId: string }).sessionId;
   await onboard(session);
   const username = await heldUsername();
   if (!username || !username.startsWith(`${base}.`)) throw Error(`The app's preferences hold ${username ? `the username ${username}` : 'no username'}, not one from the base ${base}`);

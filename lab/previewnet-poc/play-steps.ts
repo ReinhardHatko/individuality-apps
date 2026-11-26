@@ -16,7 +16,7 @@ import type { BrowserPage } from '@parity/product-lab/ports/browser';
 import { step, type StepLab } from '@parity/product-lab/steps';
 import { jsonEvidence } from '../shared/observations.ts';
 import { ConfirmTogether } from '../shared/upstream/lab/steps/dim2/confirm-together.ts';
-import { eventBelongsToAccount, playDim2InApp } from '../shared/upstream/lab/steps/dim2/live-game.ts';
+import { eventBelongsToAccount, playDim2InApp, type Dim2VoteDiagnostics } from '../shared/upstream/lab/steps/dim2/live-game.ts';
 import { camera, playerOf, world, type Player } from './people.ts';
 import { chainedNth } from './rules.ts';
 import { CONSOLE_ALL, CONSOLE_KEY } from './session.ts';
@@ -231,10 +231,14 @@ async function play(lab: StepLab, names: readonly unknown[]) {
   const together = new ConfirmTogether(), watching = watch(people, signal, game.game_date);
   // The play loop ends before the step's own limit does, so that what was seen is always attached.
   const playing = AbortSignal.any([signal, watching.lost, AbortSignal.timeout(playTakes.timeoutMs - 120_000)]);
+  // The loop hands over its vote record when it ends, also when it throws: a game that was played and whose page then
+  // went quiet (Paseo game 374, 26 November 2026) still says how many taps it made.
+  const tallies = new Map<string, Dim2VoteDiagnostics>();
   const outcomes = await Promise.allSettled(people.map(async person => {
     const { page } = person;
     // Alone among strangers there is nobody of the lab's to confirm together with: she confirms when she is ready.
-    return playDim2InApp(cssOnly(page), undefined, playing, game.game_date * 1000, undefined, undefined, people.length > 1 ? together.join(person.id) : undefined);
+    return playDim2InApp(cssOnly(page), undefined, playing, game.game_date * 1000, undefined, undefined, people.length > 1 ? together.join(person.id) : undefined,
+      undefined, undefined, votes => { tallies.set(person.id, votes); });
   }));
   await watching.stop();
   // The reports are looked for from the game on, not from the wait before it: those blocks' state may be gone by now.
@@ -242,8 +246,10 @@ async function play(lab: StepLab, names: readonly unknown[]) {
   if (played && began !== undefined) played.fromBlock = Math.max(played.fromBlock, began);
   await Promise.all(people.map(person => collect(person)));
   const evidence = await Promise.all(people.map(async (person, index) => {
-    const outcome = outcomes[index]!;
-    return { name: person.name, ...(outcome.status === 'fulfilled' ? { played: { taps: outcome.value.taps, confirmations: outcome.value.confirmations, confirm: outcome.value.confirm } } : { failed: String(outcome.reason).slice(0, 1500) }),
+    const outcome = outcomes[index]!, tally = tallies.get(person.id);
+    const votes = tally ? { roundTaps: tally.roundTaps, confirmTaps: tally.confirmTaps, reads: tally.reads, clickErrors: tally.clickErrors.length + tally.droppedErrors,
+      lastViews: tally.views.slice(-4).map(view => ({ at: new Date(view.at).toISOString(), view: view.view.slice(0, 400) })) } : null;
+    return { name: person.name, ...(outcome.status === 'fulfilled' ? { played: { taps: outcome.value.taps, confirmations: outcome.value.confirmations, confirm: outcome.value.confirm } } : { failed: String(outcome.reason).slice(0, 1500), votes }),
       screen: await screen(person.page), console: await gameLog(person.page), debugLog: await debugLog(person.page) };
   }));
   await lab.attach(jsonEvidence({ connections: Object.fromEntries(people.map(person => [person.name, connections(person.name)])) }));

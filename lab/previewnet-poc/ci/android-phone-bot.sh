@@ -81,6 +81,26 @@ run_lab() {
   return "$status"
 }
 
+# After a failed game: is the app still running, what is in front, how loaded is the device, and the device log's lines
+# about a crash, a kill, a hang or the renderer. The page's own console lines are left out (they are in the lab's
+# console file), and so is any line with a network address. Each question to the device has twenty seconds: this runs
+# when the device may be the thing that hangs. An empty "app process" alone does not tell a crash from a closed app:
+# read it with the "has died" lines.
+ask_device() { if command -v timeout > /dev/null; then timeout 20 adb -s "$serial" "$@"; else adb -s "$serial" "$@"; fi; }
+device_state() {
+  {
+    echo "at $(date -u +%H:%M:%S)Z"
+    echo "app process: $(ask_device shell pidof "$package" 2>/dev/null | tr -d '\r' || true)"
+    echo "in front: $(ask_device shell dumpsys activity activities 2>/dev/null | grep -m1 -E 'topResumedActivity|mResumedActivity' | tr -d '\r' | cut -c1-200 || true)"
+    echo "device load: $(ask_device shell cat /proc/loadavg 2>/dev/null | tr -d '\r' || true); runner load: $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || true)"
+    echo "memory: $(ask_device shell cat /proc/meminfo 2>/dev/null | grep -E '^(MemTotal|MemAvailable)' | tr -d '\r' | tr -s ' ' | tr '\n' ' ' || true)"
+    echo "device log, $(wc -l < "$device_log" | tr -d ' ') lines kept on the runner; its lines about a crash, a kill, a hang or the renderer:"
+    grep -E 'FATAL EXCEPTION|AndroidRuntime|ANR in|Not responding|has died|lowmemorykiller|Killing [0-9]+:|Fatal signal|DEBUG   :|OutOfMemory|Renderer|renderer|render process|GPU process|[Ww]eb[Vv]iew.*(crash|gone|kill|died)|Input dispatching timed out|Skipped [0-9]{3,} frames' "$device_log" \
+      | grep -v 'INFO:CONSOLE' | grep -vE '([0-9]{1,3}\.){3}[0-9]{1,3}' | cut -c1-300 | tail -300 || true
+  } > "$out/device-state.txt" 2>&1
+  say "device state after the failed game: $(sed -n 2,3p "$out/device-state.txt" | tr '\n' ';' | cut -c1-260)"
+}
+
 status=0
 if [[ "$mode" == game ]]; then
   # The page is read once before the wait, so that a phone that cannot be read fails now and not at game time.
@@ -90,7 +110,15 @@ if [[ "$mode" == game ]]; then
     (( left >= 480 )) || { say "only $(( left / 60 )) minutes to the game after the setup: too late to sign up"; status=1; }
     if (( status == 0 )); then
       if (( wait > 0 )); then say "waiting $(( wait / 60 )) minutes, to 25 minutes before the game"; sleep "$wait"; fi
+      # The device's own log of the game stays on the runner. A page that stops answering (Paseo game 374,
+      # 26 November 2026: quiet right after the game) leaves no word in the lab's reports of whether the app died,
+      # was killed or hung; device_state below takes the lines that say so, and nothing else, into the artifact.
+      device_log="${RUNNER_TEMP:-$(mktemp -d)}/device.log"
+      adb -s "$serial" logcat -c 2>/dev/null || true
+      adb -s "$serial" logcat -v threadtime > "$device_log" 2>/dev/null & logcat_pid=$!
       run_lab game "${features[@]}" || status=$?
+      (( status == 0 )) || device_state
+      kill "$logcat_pid" 2>/dev/null || true
     fi
   fi
 else
