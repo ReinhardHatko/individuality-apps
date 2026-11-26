@@ -66,6 +66,12 @@ taken=$(find "$out" .product-lab lab/previewnet-poc/.product-lab -type f -newer 
 say "pictures or videos the run wrote: $taken (expected 0)"
 find "$out" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mp4' -o -name '*.webm' -o -name 'report.html' \) -delete 2>/dev/null || true
 if [[ "$network" == previewnet ]]; then rm -f "$started"; mkdir -p "$out/console"; cp .product-lab/previewnet-poc/run-*/console/*.log "$out/console/" 2>/dev/null || true; fi
+# A failed run also keeps what each person's host and dev server said: a page that got no account from its host
+# (the first opening, 24 November 2026) says so in its console, and the host's side of it is only in the host's log.
+if [[ "$network" == previewnet ]] && (( status != 0 )); then
+  mkdir -p "$out/processes"
+  cp .product-lab/previewnet-poc/run-*/hosts/processes/*.log .product-lab/previewnet-poc/run-*/processes/*.log "$out/processes/" 2>/dev/null || true
+fi
 # Nothing that could hold a phrase leaves the runner.
 if grep -rlE "MNEMONIC=|HOST_CLI_SIGNER_MNEMONIC" "$out" > /dev/null 2>&1; then echo "A file of the artifact names a phrase variable with a value: nothing is uploaded" >&2; rm -rf "$out"; mkdir -p "$out"; status=1; fi
 say "finished with status $status"
