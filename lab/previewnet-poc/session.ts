@@ -259,7 +259,22 @@ async function start(context: SessionContext, lab: keyof typeof LABS) {
             const opening = await open('dim2', jollity); cleanups.push(() => opening.stop());
             if ((await opening.account(1)).address !== game.address) throw Error('Jollity account differs from the game account derived from the identity');
             person.inJollity = { session: opening, page: await opening.page() };
-            await reachHome(person.inJollity.page, signal);
+            try { await reachHome(person.inJollity.page, signal); }
+            catch (error) {
+              // Why a page has no account from its host is said in its console and debug log, and nowhere on screen:
+              // three runs failed here on 24 November 2026 with nothing kept. The whole console goes to the run's
+              // folder, and its lines about the host, the account and the dev server's rebuilds into the failure: the
+              // first ones, where the page asks its host for the account, and the last.
+              const lines = await person.inJollity.page.evaluate((key: string) => {
+                const all = (window as unknown as Record<string, unknown>)[key];
+                return Array.isArray(all) ? all.slice() as string[] : [];
+              }, CONSOLE_ALL).catch(() => [] as string[]);
+              mkdirSync(join(directory, 'console'), { recursive: true });
+              writeFileSync(join(directory, 'console', `${name}.opening.log`), lines.join('\n') + '\n', { mode: 0o600 });
+              const about = lines.filter(line => /\[(source|host|engine|game-source|session)\]|Fast Refresh|\[HMR\]| (error|warn|uncaught|unhandled) /.test(line));
+              const told = (about.length > 40 ? [...about.slice(0, 28), `… ${about.length - 40} more in the file …`, ...about.slice(-12)] : about).map(line => line.slice(0, 300));
+              throw Error(`${error instanceof Error ? error.message : String(error)}\nThe page's console at this opening (${lines.length} lines kept, ${about.length} about the host, the account or a rebuild):\n${told.join('\n')}`, { cause: error });
+            }
             return person.inJollity;
           },
         };
