@@ -17,6 +17,7 @@ import { step, type StepLab } from '@parity/product-lab/steps';
 import { jsonEvidence } from '../shared/observations.ts';
 import { ConfirmTogether } from '../shared/upstream/lab/steps/dim2/confirm-together.ts';
 import { eventBelongsToAccount, playDim2InApp, type Dim2VoteDiagnostics } from '../shared/upstream/lab/steps/dim2/live-game.ts';
+import { goOnAfterGame } from './after-game.ts';
 import { camera, playerOf, world, type Player } from './people.ts';
 import { chainedNth } from './rules.ts';
 import { CONSOLE_ALL, CONSOLE_KEY } from './session.ts';
@@ -29,6 +30,9 @@ const read = async (pallet: string, item: string, keys: unknown[], hash: string)
 const PLAY_ALLOWS_MS = 12 * 60_000;
 /** How long a report may take to be finalized after the play loop ended: live Previewnet reports for 12 minutes. */
 const REPORT_WAIT_MS = 15 * 60_000;
+
+/** How long her collectables may take to come after the game: they wait for the votes of the others in her group. */
+const AFTER_GAME_WAIT_MS = Math.max(1, Number(process.env.PREVIEWNET_POC_AFTER_GAME_MINUTES ?? 10) || 10) * 60_000;
 
 /** One person at the game: her page and her game account, asked for once. */
 type Seat = { player: Player; name: string; id: string; page: BrowserPage; account: string };
@@ -328,3 +332,21 @@ step("{actor}'s Jollity can be read as a game is read", async ({ lab }, name) =>
     afterSheet === true ? 'the debug sheet stayed open' : typeof afterSheet === 'string' ? `the sheet check: ${afterSheet}` : ''].filter(Boolean);
   if (failed.length) fail('unsupported-here', `${who.name}'s page cannot be read as a game needs: ${failed.join('; ')}`);
 }, { timeoutMs: 180_000 });
+
+// The way on after the game, as a person takes it (after-game.ts): a hold on the draw, then the book's cover dragged
+// across. It fails only where a gesture was made and the page did not answer it; a game without a draw, nothing to
+// keep, or collectables that were not there yet within the wait are said in the evidence and pass.
+step('{actor} holds on the draw and closes the book on her collectables', async ({ lab }, name) => {
+  const state = world(), who = playerOf(lab.actor(String(name))), page = await who.page();
+  const shots = join(state.directory, 'screens'); mkdirSync(shots, { recursive: true });
+  let taken = 0;
+  const shot = async (label: string) => {
+    const png = await who.screenshot();
+    if (png) writeFileSync(join(shots, `after-${String(++taken).padStart(2, '0')}-${who.name}-${label}-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.png`), png);
+  };
+  const went = await goOnAfterGame(page, { waitMs: AFTER_GAME_WAIT_MS, signal: state.signal, shot });
+  await shot('end');
+  await lab.attach(jsonEvidence({ afterGame: went, screenshots: shots }));
+  if (went.hold === 'did-nothing') throw Error(`${who.name}'s hold on the draw did not take the page on (${went.ended}); trail: ${JSON.stringify(went.trail)}`);
+  if (went.book === 'still-open') throw Error(`${who.name}'s drag of the book's cover did not shut it (${went.ended}); trail: ${JSON.stringify(went.trail)}`);
+}, { timeoutMs: AFTER_GAME_WAIT_MS + 3 * 60_000 });
